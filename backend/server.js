@@ -1,6 +1,7 @@
 const http = require("node:http");
 const fs = require("node:fs");
 const path = require("node:path");
+const ai = require("./ai");
 const { randomUUID } = require("node:crypto");
 
 if (typeof process.loadEnvFile === "function") {
@@ -292,6 +293,23 @@ async function handleApi(req, res, url) {
             throw new HttpError(404, "Inventory record not found.");
         }
         sendJson(res, 200, inventory[0]);
+        return;
+    }
+
+    if (req.method === "GET" && url.pathname === "/api/ai/ping") {
+        sendJson(res, 200, await ai.ping());
+        return;
+    }
+
+    if (req.method === "POST" && url.pathname === "/api/ai/recipes") {
+        const body = requireObject(await readJson(req));
+        try {
+            sendJson(res, 200, await ai.handleRecipeRequest(body, () => supabaseRequest(
+                "inventory?select=product_id,quantity,products(name,category,unit,calories_per_serving,sodium_mg,active)&limit=500"
+            )));
+        } catch (error) {
+            throw error instanceof ai.AiError ? new HttpError(error.status, error.message) : error;
+        }
         return;
     }
 
