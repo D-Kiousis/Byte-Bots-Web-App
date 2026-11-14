@@ -3,6 +3,16 @@ const fs = require("node:fs");
 const path = require("node:path");
 const { randomUUID } = require("node:crypto");
 
+if (typeof process.loadEnvFile === "function") {
+    try {
+        process.loadEnvFile(path.resolve(__dirname, "..", ".env"));
+    } catch (error) {
+        if (error.code !== "ENOENT") {
+            throw error;
+        }
+    }
+}
+
 const port = Number(process.env.PORT) || 3000;
 const frontendRoot = path.resolve(__dirname, "..", "frontend");
 const supabaseUrl = process.env.SUPABASE_URL?.replace(/\/+$/, "");

@@ -5,8 +5,8 @@ A web app built for the 2026 UNF NestforAwhile AI-led coding competition.
 ## Run locally
 
 1. In Supabase, open **SQL Editor** and run `database/schema.sql`.
-2. From this folder, run `Copy-Item .env.example .env` in PowerShell. Set `SUPABASE_URL` and a rotated server-side `SUPABASE_SECRET_KEY` in `.env`.
-3. Start the app with `node --env-file=.env backend\server.js`.
+2. From the project root, create `.env` and set `SUPABASE_URL` and a server-side `SUPABASE_SECRET_KEY`.
+3. Start the app with `node backend/server.js`. Node 20.12 or newer automatically loads the root `.env`; on older Node versions, export the variables in your shell first.
 4. Open <http://localhost:3000>.
 
 The Node server uses only built-in modules and serves the React 18 frontend from `frontend/`. React and ReactDOM load from a CDN, so the browser needs internet access. No npm install or build step is required.
