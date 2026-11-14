@@ -1,7 +1,6 @@
 (function () {
   const h = React.createElement;
-  const { useMemo, useState } = React;
-  const data = window.EpicCureData;
+  const { useEffect, useMemo, useState } = React;
 
   const navItems = [
     ["dashboard", "Dashboard", "grid"],
@@ -39,8 +38,8 @@
     }, h("path", { d: paths[name] || paths.grid }));
   }
 
-  function Button({ children, variant = "primary", onClick, icon, className = "", type = "button" }) {
-    return h("button", { className: `button button-${variant} ${className}`.trim(), onClick, type },
+  function Button({ children, variant = "primary", onClick, icon, className = "", type = "button", disabled = false }) {
+    return h("button", { className: `button button-${variant} ${className}`.trim(), onClick, type, disabled },
       icon && h(Icon, { name: icon }), children);
   }
 
@@ -60,45 +59,110 @@
     return new Date(`${date}T12:00:00`).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
   }
 
+  async function api(path, options = {}) {
+    const response = await fetch(path, {
+      ...options,
+      headers: {
+        ...(options.body ? { "Content-Type": "application/json" } : {}),
+        ...(options.headers || {}),
+      },
+    });
+    const result = await response.json();
+    if (!response.ok) throw new Error(result.error || "Request failed.");
+    return result;
+  }
+
+  function mapPatient(record) {
+    return {
+      id: record.id,
+      registeredAt: record.created_at.slice(0, 10),
+    };
+  }
+
+  function mapInventory(record) {
+    const product = record.products || {};
+    const quantity = Number(record.quantity);
+    const reorderLevel = Number(record.reorder_level);
+    const visuals = {
+      Grains: { icon: "🌾", color: "sand" },
+      Pantry: { icon: "🫘", color: "lilac" },
+      Produce: { icon: "🥬", color: "mint" },
+      Protein: { icon: "🐟", color: "peach" },
+    };
+    const visual = visuals[product.category] || { icon: "🛒", color: "blue" };
+
+    return {
+      id: record.product_id,
+      name: product.name || "Unnamed product",
+      category: product.category || "Other",
+      quantity,
+      reorderLevel,
+      unit: product.unit || "each",
+      calories: Number(product.calories_per_serving || 0),
+      sodium: Number(product.sodium_mg || 0),
+      stock: quantity === 0 ? "Out of stock" : quantity <= reorderLevel ? "Low stock" : "In stock",
+      icon: visual.icon,
+      color: visual.color,
+      updatedAt: record.updated_at,
+    };
+  }
+
   function App() {
     const [page, setPage] = useState("dashboard");
-    const [patients, setPatients] = useState(data.patients);
+    const [patients, setPatients] = useState([]);
+    const [inventory, setInventory] = useState([]);
     const [selectedPatientId, setSelectedPatientId] = useState(null);
     const [search, setSearch] = useState("");
-    const [statusFilter, setStatusFilter] = useState("All statuses");
     const [mobileNavOpen, setMobileNavOpen] = useState(false);
     const [registerOpen, setRegisterOpen] = useState(false);
+    const [productOpen, setProductOpen] = useState(false);
     const [pendingUuid, setPendingUuid] = useState(makeUuid);
-    const [conditions, setConditions] = useState([]);
-    const [restrictions, setRestrictions] = useState([]);
-    const [newStatus, setNewStatus] = useState("Active");
     const [toast, setToast] = useState("");
-    const [recommendationsReady, setRecommendationsReady] = useState(false);
+    const [databaseError, setDatabaseError] = useState("");
+    const [registering, setRegistering] = useState(false);
+    const [savingProduct, setSavingProduct] = useState(false);
+    const [savingInventoryId, setSavingInventoryId] = useState(null);
     const [emailUpdates, setEmailUpdates] = useState(true);
-    const [cart, setCart] = useState([
-      { name: "Old-fashioned oats", quantity: 2 },
-      { name: "Fresh baby spinach", quantity: 1 },
-    ]);
+    const [cart, setCart] = useState([]);
 
     const selectedPatient = patients.find((patient) => patient.id === selectedPatientId);
     const filteredPatients = useMemo(() => patients.filter((patient) => {
-      const matchesSearch = patient.id.toLowerCase().includes(search.trim().toLowerCase());
-      const matchesStatus = statusFilter === "All statuses" || patient.status === statusFilter;
-      return matchesSearch && matchesStatus;
-    }), [patients, search, statusFilter]);
-    const pendingOrders = patients.reduce((total, patient) =>
-      total + patient.orders.filter((order) => order.status === "Processing").length, 0);
+      return patient.id.toLowerCase().includes(search.trim().toLowerCase());
+    }), [patients, search]);
 
     function notify(message) {
       setToast(message);
       window.setTimeout(() => setToast(""), 3000);
     }
 
+    async function loadDatabaseData() {
+      try {
+        const health = await api("/api/health");
+        if (!health.databaseConfigured) {
+          throw new Error("Supabase is not configured. Add the project URL and rotated secret key to .env.");
+        }
+        const [patientRows, inventoryRows] = await Promise.all([
+          api("/api/patients"),
+          api("/api/inventory"),
+        ]);
+        setPatients(patientRows.map(mapPatient));
+        setInventory(inventoryRows.map(mapInventory));
+        setDatabaseError("");
+        return true;
+      } catch (error) {
+        setDatabaseError(error.message);
+        return false;
+      }
+    }
+
+    useEffect(() => {
+      loadDatabaseData();
+    }, []);
+
     function goTo(nextPage) {
       setPage(nextPage);
       setMobileNavOpen(false);
       setSearch("");
-      setRecommendationsReady(false);
     }
 
     function showPatient(patient) {
@@ -107,33 +171,76 @@
       setMobileNavOpen(false);
     }
 
-    function toggleOption(list, setList, value) {
-      setList(list.includes(value) ? list.filter((item) => item !== value) : [...list, value]);
-    }
-
-    function registerPatient(event) {
+    async function registerPatient(event) {
       event.preventDefault();
-      const patient = {
-        id: pendingUuid,
-        registeredAt: new Date().toISOString().slice(0, 10),
-        status: newStatus,
-        conditions,
-        restrictions,
-        orders: [],
-      };
-      setPatients((current) => [patient, ...current]);
-      setRegisterOpen(false);
-      setConditions([]);
-      setRestrictions([]);
-      setNewStatus("Active");
-      setPendingUuid(makeUuid());
-      showPatient(patient);
-      notify("Patient record created in this demo session.");
+      setRegistering(true);
+      try {
+        const record = await api("/api/patients", {
+          method: "POST",
+          body: JSON.stringify({ id: pendingUuid }),
+        });
+        const patient = mapPatient(record);
+        setPatients((current) => [patient, ...current]);
+        setRegisterOpen(false);
+        setPendingUuid(makeUuid());
+        setDatabaseError("");
+        showPatient(patient);
+        notify("Patient ID saved to Supabase.");
+      } catch (error) {
+        setDatabaseError(error.message);
+        notify(`Patient ID could not be saved: ${error.message}`);
+      } finally {
+        setRegistering(false);
+      }
     }
 
-    function generateRecommendations() {
-      setRecommendationsReady(true);
-      notify("Demo recommendations are ready. No AI service is connected.");
+    async function createProduct(event) {
+      event.preventDefault();
+      const values = Object.fromEntries(new FormData(event.currentTarget).entries());
+      setSavingProduct(true);
+      try {
+        await api("/api/products", {
+          method: "POST",
+          body: JSON.stringify({
+            name: values.name,
+            sku: values.sku,
+            category: values.category,
+            unit: values.unit,
+            calories_per_serving: Number(values.calories_per_serving || 0),
+            sodium_mg: Number(values.sodium_mg || 0),
+          }),
+        });
+        setProductOpen(false);
+        const refreshed = await loadDatabaseData();
+        notify(refreshed ? "Product saved; its inventory starts at zero." : "Product saved, but the inventory list could not be refreshed.");
+      } catch (error) {
+        setDatabaseError(error.message);
+        notify(`Product could not be saved: ${error.message}`);
+      } finally {
+        setSavingProduct(false);
+      }
+    }
+
+    async function updateInventory(event, item) {
+      event.preventDefault();
+      const values = Object.fromEntries(new FormData(event.currentTarget).entries());
+      setSavingInventoryId(item.id);
+      try {
+        await api(`/api/inventory/${encodeURIComponent(item.id)}`, {
+          method: "PATCH",
+          body: JSON.stringify({
+            quantity: Number(values.quantity),
+            reorder_level: Number(values.reorder_level),
+          }),
+        });
+        const refreshed = await loadDatabaseData();
+        notify(refreshed ? "Inventory updated." : "Inventory saved, but the list could not be refreshed.");
+      } catch (error) {
+        setDatabaseError(error.message);
+        notify(`Inventory could not be updated: ${error.message}`);
+      } finally {
+        setSavingInventoryId(null);
+      }
     }
 
     function addToCart(productName) {
@@ -167,7 +274,7 @@
           h("div", { className: "sidebar-bottom" },
             h("div", { className: "privacy-note" },
               h("span", { className: "privacy-icon" }, h(Icon, { name: "leaf" })),
-              h("div", null, h("strong", null, "Care, with purpose"), h("span", null, "Demo workspace · fictional data"))
+              h("div", null, h("strong", null, "Care, with purpose"), h("span", null, "Local prototype · no patient details"))
             ),
             h("button", { className: `nav-item ${page === "settings" ? "nav-item-active" : ""}`, onClick: () => goTo("settings") },
               h(Icon, { name: "settings" }), h("span", null, "Settings"))
@@ -207,18 +314,18 @@
 
     function Dashboard() {
       const statCards = [
-        { title: "Registered patients", value: patients.length.toLocaleString(), change: "+12%", detail: "vs. last month", icon: "users", tone: "purple" },
-        { title: "Active patients", value: patients.filter((patient) => patient.status === "Active").length.toLocaleString(), change: "Care ready", detail: "enrolled accounts", icon: "leaf", tone: "green" },
-        { title: "Available products", value: data.inventory.filter((item) => item.quantity > 0).length.toLocaleString(), change: "Across 4 categories", detail: "inventory items", icon: "box", tone: "orange" },
-        { title: "Pending orders", value: pendingOrders.toString().padStart(2, "0"), change: "Needs attention", detail: "currently processing", icon: "clipboard", tone: "blue" },
+        { title: "Patient IDs", value: patients.length.toLocaleString(), change: "Supabase", detail: "saved records", icon: "users", tone: "purple" },
+        { title: "Products", value: inventory.length.toLocaleString(), change: "Supabase", detail: "tracked items", icon: "box", tone: "green" },
+        { title: "In stock", value: inventory.filter((item) => item.quantity > 0).length.toLocaleString(), change: "Available", detail: "products", icon: "leaf", tone: "orange" },
+        { title: "Restock needed", value: inventory.filter((item) => item.quantity <= item.reorderLevel).length.toLocaleString(), change: "Review", detail: "low or empty", icon: "clipboard", tone: "blue" },
       ];
       return h(React.Fragment, null,
-        h(PageHeading, { eyebrow: "FRIDAY, NOVEMBER 14, 2026", title: "Welcome to Epic Cure", description: "A healthier food system starts with thoughtful care, one basket at a time." }),
+        h(PageHeading, { eyebrow: new Date().toLocaleDateString("en-US", { weekday: "long", month: "long", day: "numeric", year: "numeric" }).toUpperCase(), title: "Welcome to Epic Cure", description: "A healthier food system starts with thoughtful care, one basket at a time." }),
         h("section", { className: "welcome-banner" },
           h("div", { className: "welcome-copy" },
             h("span", { className: "banner-kicker" }, h(Icon, { name: "sparkles" }), "MEDICALLY TAILORED GROCERIES"),
             h("h2", null, "Good food. Better health."),
-            h("p", null, "Coordinate nourishing groceries, personalized recipes, and patient care in one thoughtful workspace."),
+            h("p", null, "Manage patient IDs and grocery inventory in one thoughtful workspace."),
             h(Button, { variant: "light", icon: "arrow", onClick: () => goTo("patients") }, "Explore patients")
           ),
           h("div", { className: "banner-art", "aria-hidden": "true" },
@@ -241,8 +348,8 @@
               ...[
                 ["plus", "quick-purple", "Register patient", "Create a new care record", () => setRegisterOpen(true)],
                 ["box", "quick-green", "View inventory", "Check product availability", () => goTo("inventory")],
-                ["sparkles", "quick-orange", "Generate recipes", "Explore tailored meal ideas", () => goTo("recipes")],
-                ["clipboard", "quick-blue", "Manage orders", "Track active deliveries", () => goTo("orders")],
+                ["users", "quick-orange", "View patient IDs", "Browse saved records", () => goTo("patients")],
+                ["settings", "quick-blue", "Database setup", "Review connection settings", () => goTo("settings")],
               ].map(([icon, color, title, detail, action]) =>
                 h("button", { className: "quick-action", key: title, onClick: action },
                   h("span", { className: `quick-icon ${color}` }, h(Icon, { name: icon })),
@@ -253,15 +360,20 @@
           ),
           h("article", { className: "panel activity-panel" },
             h("div", { className: "panel-heading panel-heading-inline" },
-              h("div", null, h("h2", null, "Recent activity"), h("p", null, "A little progress, all in one place.")),
-              h("button", { className: "text-button", onClick: () => goTo("orders") }, "View all", h(Icon, { name: "arrow" }))
+              h("div", null, h("h2", null, "Connected records"), h("p", null, "Live counts from your Supabase database.")),
+              h("span", { className: "table-updated" }, "Live")
             ),
             h("div", { className: "activity-list" },
-              ...data.activity.map((activity, index) => h("div", { className: "activity-item", key: `${activity.title}-${index}` },
-                h("span", { className: `activity-dot activity-${activity.color}` }, h(Icon, { name: activity.type === "patient" ? "users" : activity.type === "inventory" ? "box" : "cart" })),
-                h("div", { className: "activity-copy" }, h("strong", null, activity.title), h("span", null, activity.detail)),
-                h("time", null, activity.time)
-              ))
+              h("div", { className: "activity-item" },
+                h("span", { className: "activity-dot activity-purple" }, h(Icon, { name: "users" })),
+                h("div", { className: "activity-copy" }, h("strong", null, "Patient IDs"), h("span", null, "Patient UUIDs and creation dates")),
+                h("time", null, patients.length)
+              ),
+              h("div", { className: "activity-item" },
+                h("span", { className: "activity-dot activity-green" }, h(Icon, { name: "box" })),
+                h("div", { className: "activity-copy" }, h("strong", null, "Products and inventory"), h("span", null, "Stock levels and reorder thresholds")),
+                h("time", null, inventory.length)
+              )
             )
           )
         )
@@ -270,48 +382,31 @@
 
     function PatientsPage() {
       return h(React.Fragment, null,
-        h(PageHeading, { eyebrow: "CARE NETWORK", title: "Patients", description: "Manage fictional demo records and their food preferences.", actions: h(Button, { icon: "plus", onClick: () => setRegisterOpen(true) }, "Register patient") }),
+        h(PageHeading, { eyebrow: "CARE NETWORK", title: "Patients", description: "Create and search patient UUIDs. No personal or health information is stored.", actions: h(Button, { icon: "plus", onClick: () => setRegisterOpen(true) }, "Create patient ID") }),
         h("div", { className: "patient-summary-row" },
           h("div", { className: "patient-summary-card" }, h("span", { className: "summary-icon summary-violet" }, h(Icon, { name: "users" })), h("div", null, h("strong", null, patients.length), h("span", null, "Total records"))),
-          h("div", { className: "patient-summary-card" }, h("span", { className: "summary-icon summary-green" }, h(Icon, { name: "leaf" })), h("div", null, h("strong", null, patients.filter((patient) => patient.status === "Active").length), h("span", null, "Active accounts"))),
-          h("div", { className: "privacy-inline" }, h(Icon, { name: "check" }), "Fictional demo records · No personal identifiers collected")
+          h("div", { className: "privacy-inline" }, h(Icon, { name: "check" }), "Only UUIDs and creation dates are saved")
         ),
         h("section", { className: "panel table-panel" },
           h("div", { className: "table-toolbar" },
             h("div", null, h("h2", null, "Patient directory"), h("p", null, "Search by randomly generated patient UUID.")),
-            h("label", { className: "filter-select" }, h("span", { className: "sr-only" }, "Filter by account status"), h("select", { value: statusFilter, onChange: (event) => setStatusFilter(event.target.value) },
-              h("option", null, "All statuses"), h("option", null, "Active"), h("option", null, "Inactive")
-            ))
+            h("button", { className: "text-button", onClick: loadDatabaseData }, "Refresh")
           ),
           h("div", { className: "table-wrap" },
             h("table", null,
-              h("thead", null, h("tr", null, h("th", null, "PATIENT ID"), h("th", null, "REGISTERED"), h("th", null, "ACCOUNT STATUS"), h("th", null, "CARE PROFILE"), h("th", null, " "))),
-              h("tbody", null, ...filteredPatients.map((patient) => h("tr", { key: patient.id },
-                h("td", null, h("div", { className: "patient-id-cell" }, h("span", { className: "patient-mini-avatar" }, h(Icon, { name: "users" })), h("span", null, h("strong", null, "Patient"), h("small", null, patient.id)))),
-                h("td", null, formatDate(patient.registeredAt)),
-                h("td", null, h(Tag, { tone: patient.status === "Active" ? "green" : "neutral" }, h("span", { className: "tag-dot" }), patient.status)),
-                h("td", null, h("span", { className: "care-count" }, `${patient.conditions.length} conditions · ${patient.restrictions.length} preferences`)),
-                h("td", null, h("button", { className: "row-action", onClick: () => showPatient(patient), "aria-label": "View patient profile" }, "View profile", h(Icon, { name: "arrow" }))
-              ))))
+              h("thead", null, h("tr", null, h("th", null, "PATIENT ID"), h("th", null, "CREATED"), h("th", null, " "))),
+              h("tbody", null, filteredPatients.length
+                ? filteredPatients.map((patient) => h("tr", { key: patient.id },
+                  h("td", null, h("div", { className: "patient-id-cell" }, h("span", { className: "patient-mini-avatar" }, h(Icon, { name: "users" })), h("span", null, h("strong", null, "Patient"), h("small", null, patient.id)))),
+                  h("td", null, formatDate(patient.registeredAt)),
+                  h("td", null, h("button", { className: "row-action", onClick: () => showPatient(patient), "aria-label": "View patient ID" }, "View ID", h(Icon, { name: "arrow" })))
+                ))
+                : h("tr", null, h("td", { colSpan: 3, className: "patient-empty" }, "No patient IDs found. Create one to get started."))
+              )
             )
-          ),
-          filteredPatients.length === 0 && h("div", { className: "empty-state" }, h(Icon, { name: "search" }), h("strong", null, "No matching records"), h("span", null, "Try a different UUID or account status."))
+          )
         ),
-        h("p", { className: "privacy-footnote" }, h(Icon, { name: "leaf" }), "Patient IDs are demo identifiers only—not authentication credentials or access controls.")
-      );
-    }
-
-    function MultiSelect({ label, options, selected, onToggle, description }) {
-      return h("fieldset", { className: "form-fieldset" },
-        h("legend", null, label),
-        h("p", { className: "field-help" }, description),
-        h("div", { className: "checkbox-grid" },
-          ...options.map((option) => h("label", { className: `checkbox-option ${selected.includes(option) ? "checkbox-selected" : ""}`, key: option },
-            h("input", { type: "checkbox", checked: selected.includes(option), onChange: () => onToggle(option) }),
-            h("span", { className: "custom-checkbox" }, selected.includes(option) && h(Icon, { name: "check" })),
-            option
-          ))
-        )
+        h("p", { className: "privacy-footnote" }, h(Icon, { name: "leaf" }), "Patient IDs are identifiers only—not authentication credentials or access controls.")
       );
     }
 
@@ -320,96 +415,114 @@
       return h("div", { className: "modal-backdrop", onMouseDown: (event) => { if (event.target === event.currentTarget) setRegisterOpen(false); } },
         h("section", { className: "modal", role: "dialog", "aria-modal": "true", "aria-labelledby": "register-title" },
           h("div", { className: "modal-header" },
-            h("div", null, h("span", { className: "eyebrow" }, "NEW CARE RECORD"), h("h2", { id: "register-title" }, "Register a patient"), h("p", null, "Only care-related preferences are collected in this demo.")),
+            h("div", null, h("span", { className: "eyebrow" }, "NEW RECORD"), h("h2", { id: "register-title" }, "Create a patient ID"), h("p", null, "Only the UUID and creation date are saved.")),
             h("button", { className: "icon-button", onClick: () => setRegisterOpen(false), "aria-label": "Close registration form" }, h(Icon, { name: "close" }))
           ),
           h("form", { onSubmit: registerPatient, className: "registration-form" },
             h("label", { className: "form-label" }, "Patient UUID",
               h("div", { className: "uuid-preview" }, h("span", null, pendingUuid), h("small", null, "Generated automatically"))
             ),
-            h(MultiSelect, { label: "Medical conditions", options: data.conditions, selected: conditions, onToggle: (option) => toggleOption(conditions, setConditions, option), description: "Select any that apply to this fictional demo record." }),
-            h(MultiSelect, { label: "Dietary restrictions", options: data.restrictions, selected: restrictions, onToggle: (option) => toggleOption(restrictions, setRestrictions, option), description: "Select preferences to help tailor grocery recommendations." }),
-            h("label", { className: "form-label" }, "Account status",
-              h("select", { className: "form-control", value: newStatus, onChange: (event) => setNewStatus(event.target.value) }, h("option", null, "Active"), h("option", null, "Inactive"))
+            h("div", { className: "form-privacy" }, h(Icon, { name: "leaf" }), h("span", null, "No names, contact details, or medical information are collected or stored.")),
+            h("div", { className: "modal-actions" }, h(Button, { variant: "secondary", onClick: () => setRegisterOpen(false) }, "Cancel"), h(Button, { type: "submit", icon: "plus", disabled: registering }, registering ? "Saving..." : "Create patient ID"))
+          )
+        )
+      );
+    }
+
+    function ProductModal() {
+      if (!productOpen) return null;
+      return h("div", { className: "modal-backdrop", onMouseDown: (event) => { if (event.target === event.currentTarget) setProductOpen(false); } },
+        h("section", { className: "modal", role: "dialog", "aria-modal": "true", "aria-labelledby": "product-title" },
+          h("div", { className: "modal-header" },
+            h("div", null, h("span", { className: "eyebrow" }, "WAREHOUSE"), h("h2", { id: "product-title" }, "Add a product"), h("p", null, "The product and its starting inventory record are saved in Supabase.")),
+            h("button", { className: "icon-button", onClick: () => setProductOpen(false), "aria-label": "Close product form" }, h(Icon, { name: "close" }))
+          ),
+          h("form", { onSubmit: createProduct, className: "registration-form" },
+            h("label", { className: "form-label" }, "Product name",
+              h("input", { className: "form-control", name: "name", required: true, maxLength: 200 })
             ),
-            h("div", { className: "form-privacy" }, h(Icon, { name: "leaf" }), h("span", null, "This prototype never asks for a name, phone number, address, or date of birth. Data stays in memory and clears on refresh.")),
-            h("div", { className: "modal-actions" }, h(Button, { variant: "secondary", onClick: () => setRegisterOpen(false) }, "Cancel"), h(Button, { type: "submit", icon: "plus" }, "Create patient record"))
+            h("label", { className: "form-label" }, "SKU",
+              h("input", { className: "form-control", name: "sku", maxLength: 100 })
+            ),
+            h("label", { className: "form-label" }, "Category",
+              h("select", { className: "form-control", name: "category" },
+                h("option", { value: "" }, "Select category"),
+                h("option", null, "Grains"),
+                h("option", null, "Pantry"),
+                h("option", null, "Produce"),
+                h("option", null, "Protein")
+              )
+            ),
+            h("label", { className: "form-label" }, "Unit",
+              h("input", { className: "form-control", name: "unit", defaultValue: "each", required: true, maxLength: 40 })
+            ),
+            h("div", { className: "product-nutrition-fields" },
+              h("label", { className: "form-label" }, "Calories per serving",
+                h("input", { className: "form-control", name: "calories_per_serving", type: "number", min: "0", step: "0.01", defaultValue: "0", required: true })
+              ),
+              h("label", { className: "form-label" }, "Sodium (mg)",
+                h("input", { className: "form-control", name: "sodium_mg", type: "number", min: "0", step: "0.01", defaultValue: "0", required: true })
+              )
+            ),
+            h("div", { className: "form-privacy" }, h(Icon, { name: "box" }), h("span", null, "New inventory starts at zero. Set the quantity and low-stock threshold from the inventory table.")),
+            h("div", { className: "modal-actions" },
+              h(Button, { variant: "secondary", onClick: () => setProductOpen(false) }, "Cancel"),
+              h(Button, { type: "submit", icon: "plus", disabled: savingProduct }, savingProduct ? "Saving..." : "Add product")
+            )
           )
         )
       );
     }
 
     function PatientProfile() {
-      if (!selectedPatient) return h("div", { className: "empty-state profile-empty" }, h("strong", null, "Choose a patient record"), h(Button, { onClick: () => goTo("patients") }, "Back to patients"));
-      const suggestedRecipes = data.recipes.filter((recipe) =>
-        recipe.compatibility.some((preference) => selectedPatient.restrictions.includes(preference)));
+      if (!selectedPatient) return h("div", { className: "empty-state profile-empty" }, h("strong", null, "Choose a patient ID"), h(Button, { onClick: () => goTo("patients") }, "Back to patients"));
       return h(React.Fragment, null,
         h("button", { className: "back-link", onClick: () => goTo("patients") }, h(Icon, { name: "chevron" }), "Back to patients"),
-        h(PageHeading, { eyebrow: "PATIENT PROFILE", title: "Patient overview", description: "Fictional care record · Patient IDs are not access credentials.", actions: h(Tag, { tone: selectedPatient.status === "Active" ? "green" : "neutral" }, h("span", { className: "tag-dot" }), selectedPatient.status) }),
+        h(PageHeading, { eyebrow: "PATIENT DIRECTORY", title: "Patient ID", description: "This UUID is an identifier only, not an access credential." }),
         h("section", { className: "profile-hero panel" },
           h("div", { className: "profile-avatar" }, h(Icon, { name: "users" })),
-          h("div", { className: "profile-identity" }, h("span", { className: "eyebrow" }, "PATIENT UUID"), h("h2", null, selectedPatient.id), h("span", null, `Registered ${formatDate(selectedPatient.registeredAt)}`)),
-          h(Button, { icon: "sparkles", onClick: generateRecommendations }, "Generate grocery recommendations")
-        ),
-        h("div", { className: "profile-grid" },
-          h("section", { className: "panel profile-section" },
-            h("div", { className: "panel-heading" }, h("div", null, h("h2", null, "Care preferences"), h("p", null, "Visible here only for the selected demo profile."))),
-            h("div", { className: "profile-preference" }, h("span", { className: "preference-icon preference-purple" }, h(Icon, { name: "clipboard" })), h("div", null, h("strong", null, "Medical conditions"), h("div", { className: "tag-list" }, selectedPatient.conditions.length ? selectedPatient.conditions.map((condition) => h(Tag, { key: condition }, condition)) : h("span", { className: "muted" }, "None selected")))),
-            h("div", { className: "profile-preference" }, h("span", { className: "preference-icon preference-green" }, h(Icon, { name: "leaf" })), h("div", null, h("strong", null, "Dietary restrictions"), h("div", { className: "tag-list" }, selectedPatient.restrictions.length ? selectedPatient.restrictions.map((restriction) => h(Tag, { tone: "green", key: restriction }, restriction)) : h("span", { className: "muted" }, "None selected"))))
-          ),
-          h("section", { className: "panel profile-section" },
-            h("div", { className: "panel-heading panel-heading-inline" }, h("div", null, h("h2", null, "Previous grocery orders"), h("p", null, "Recent order activity for this record.")), h(Icon, { name: "cart", className: "heading-icon" })),
-            selectedPatient.orders.length
-              ? h("div", { className: "order-list" }, ...selectedPatient.orders.map((order) => h("div", { className: "order-row", key: order.id },
-                h("span", { className: "order-icon" }, h(Icon, { name: "package" })),
-                h("div", null, h("strong", null, order.id), h("span", null, `${order.items} grocery items · ${formatDate(order.date)}`)),
-                h(Tag, { tone: order.status === "Delivered" ? "green" : "orange" }, order.status)
-              )))
-              : h("div", { className: "empty-inline" }, "No grocery orders yet.")
-          ),
-          h("section", { className: "panel profile-section" },
-            h("div", { className: "panel-heading panel-heading-inline" },
-              h("div", null, h("h2", null, "Recommended recipes"), h("p", null, "Mock suggestions that match selected dietary preferences.")),
-              h(Tag, null, "Mock")
-            ),
-            h("div", { className: "recommended-list" },
-              ...(suggestedRecipes.length ? suggestedRecipes : data.recipes).slice(0, 3).map((recipe) =>
-                h("div", { className: "recommended-recipe", key: recipe.name },
-                  h("span", { className: `recommended-emoji recipe-${recipe.color}` }, recipe.image),
-                  h("div", null, h("strong", null, recipe.name), h("span", null, recipe.category))
-                ))
-            )
+          h("div", { className: "profile-identity" },
+            h("span", { className: "eyebrow" }, "PATIENT UUID"),
+            h("h2", null, selectedPatient.id),
+            h("span", null, `Created ${formatDate(selectedPatient.registeredAt)}`)
           )
-        ),
-        recommendationsReady && h("section", { className: "panel generated-note" },
-          h("span", { className: "generated-check" }, h(Icon, { name: "check" })),
-          h("div", null, h("strong", null, "Demo recommendations generated"), h("p", null, "Suggested staples include oats, leafy greens, and no-salt-added legumes based on this profile’s preferences.")),
-          h(Tag, null, "Mock data")
         )
       );
     }
 
     function InventoryPage() {
-      const restock = data.inventory.filter((item) => item.quantity > 0 && item.quantity < 50).length;
-      const outOfStock = data.inventory.filter((item) => item.quantity === 0).length;
+      const restock = inventory.filter((item) => item.quantity > 0 && item.quantity <= item.reorderLevel).length;
+      const outOfStock = inventory.filter((item) => item.quantity === 0).length;
       return h(React.Fragment, null,
-        h(PageHeading, { eyebrow: "WAREHOUSE", title: "Grocery inventory", description: "Fictional products with nutrition information for a demo warehouse.", actions: h(Button, { variant: "secondary", icon: "plus", onClick: () => notify("Inventory editing is not connected in this demo.") }, "Add product") }),
+        h(PageHeading, { eyebrow: "WAREHOUSE", title: "Grocery inventory", description: "Products and stock levels saved in Supabase.", actions: h(Button, { variant: "secondary", icon: "plus", onClick: () => setProductOpen(true) }, "Add product") }),
         h("div", { className: "inventory-summary" },
-          h("div", null, h("span", null, "PRODUCTS"), h("strong", null, data.inventory.length)),
+          h("div", null, h("span", null, "PRODUCTS"), h("strong", null, inventory.length)),
           h("div", null, h("span", null, "NEED RESTOCK"), h("strong", { className: "text-orange" }, restock)),
           h("div", null, h("span", null, "OUT OF STOCK"), h("strong", { className: "text-red" }, outOfStock))
         ),
         h("section", { className: "panel table-panel" },
-          h("div", { className: "table-toolbar" }, h("div", null, h("h2", null, "Products"), h("p", null, "Nutrition values shown per serving.")), h("span", { className: "table-updated" }, "Updated just now")),
+          h("div", { className: "table-toolbar" }, h("div", null, h("h2", null, "Products"), h("p", null, "Edit available quantity and its low-stock threshold.")), h("button", { className: "text-button", onClick: loadDatabaseData }, "Refresh")),
           h("div", { className: "table-wrap" }, h("table", null,
             h("thead", null, h("tr", null, h("th", null, "PRODUCT"), h("th", null, "CATEGORY"), h("th", null, "QTY AVAILABLE"), h("th", null, "STOCK STATUS"), h("th", null, "NUTRITION / SERVING"))),
-            h("tbody", null, ...data.inventory.map((item) => h("tr", { key: item.name },
-              h("td", null, h("div", { className: "product-cell" }, h("span", { className: `product-emoji product-${item.color}` }, item.icon), h("strong", null, item.name))),
-              h("td", null, h("span", { className: "category-label" }, item.category)),
-              h("td", null, h("strong", null, item.quantity), h("span", { className: "unit-label" }, ` ${item.unit}`)),
-              h("td", null, h(Tag, { tone: item.stock === "In stock" ? "green" : item.stock === "Low stock" ? "orange" : "red" }, h("span", { className: "tag-dot" }), item.stock)),
-              h("td", null, h("span", { className: "nutrition-cell" }, `${item.calories} cal`, h("i", null), `${item.sodium} mg sodium`))
-            )))
+            h("tbody", null, inventory.length
+              ? inventory.map((item) => h("tr", { key: item.id },
+                h("td", null, h("div", { className: "product-cell" }, h("span", { className: `product-emoji product-${item.color}` }, item.icon), h("strong", null, item.name))),
+                h("td", null, h("span", { className: "category-label" }, item.category)),
+                h("td", null,
+                  h("div", null, h("strong", null, item.quantity), h("span", { className: "unit-label" }, ` ${item.unit}`)),
+                  h("form", { className: "stock-editor", key: `${item.id}-${item.updatedAt}`, onSubmit: (event) => updateInventory(event, item) },
+                    h("label", { className: "sr-only", htmlFor: `quantity-${item.id}` }, "Available quantity"),
+                    h("input", { id: `quantity-${item.id}`, name: "quantity", type: "number", min: "0", step: "0.01", defaultValue: item.quantity, required: true }),
+                    h("label", { className: "sr-only", htmlFor: `reorder-${item.id}` }, "Reorder threshold"),
+                    h("input", { id: `reorder-${item.id}`, name: "reorder_level", type: "number", min: "0", step: "0.01", defaultValue: item.reorderLevel, required: true }),
+                    h(Button, { type: "submit", className: "stock-save", disabled: savingInventoryId === item.id }, savingInventoryId === item.id ? "..." : "Save")
+                  )
+                ),
+                h("td", null, h(Tag, { tone: item.stock === "In stock" ? "green" : item.stock === "Low stock" ? "orange" : "red" }, h("span", { className: "tag-dot" }), item.stock)),
+                h("td", null, h("span", { className: "nutrition-cell" }, `${item.calories} cal`, h("i", null), `${item.sodium} mg sodium`))
+              ))
+              : h("tr", null, h("td", { colSpan: 5, className: "empty-state" }, "No products yet. Add a product to start tracking inventory."))
+            )
           ))
         )
       );
@@ -417,26 +530,9 @@
 
     function RecipesPage() {
       return h(React.Fragment, null,
-        h(PageHeading, { eyebrow: "PERSONALIZED NUTRITION", title: "Recipe recommendations", description: "Simple, nourishing ideas built around familiar pantry ingredients.", actions: h(Button, { icon: "sparkles", onClick: generateRecommendations }, "Generate AI Recommendations") }),
-        h("div", { className: "demo-notice" }, h(Icon, { name: "sparkles" }), h("span", null, h("strong", null, "Demo mode:"), " Recommendations below use mock data. No AI service, including Gemini, is connected.")),
-        recommendationsReady && h("div", { className: "generated-note compact-generated" }, h("span", { className: "generated-check" }, h(Icon, { name: "check" })), h("span", null, "Mock recommendations refreshed for this demo session.")),
-        h("div", { className: "recipe-grid" },
-          ...data.recipes.map((recipe) => h("article", { className: "recipe-card panel", key: recipe.name },
-            h("div", { className: `recipe-art recipe-${recipe.color}` }, h("span", { className: "recipe-art-emoji" }, recipe.image), h("span", { className: "recipe-art-label" }, "NOURISH · EVERYDAY"), h("span", { className: "recipe-art-spark" }, "✦")),
-            h("div", { className: "recipe-body" },
-              h("span", { className: "eyebrow" }, recipe.category),
-              h("h2", null, recipe.name),
-              h("div", { className: "compatibility-list" }, ...recipe.compatibility.map((label) => h(Tag, { tone: "green", key: label }, h(Icon, { name: "check" }), label))),
-              h("div", { className: "recipe-nutrition" },
-                h("div", null, h("strong", null, recipe.calories), h("span", null, "calories")),
-                h("div", null, h("strong", null, `${recipe.sodium} mg`), h("span", null, "sodium")),
-                h("div", null, h("strong", null, `${recipe.protein} g`), h("span", null, "protein"))
-              ),
-              h("div", { className: "ingredients-line" }, h("strong", null, "Ingredients"), h("p", null, recipe.ingredients.join(" · "))),
-              h(Button, { variant: "secondary", className: "recipe-add-button", icon: "plus", onClick: () => addToCart(recipe.ingredients[0]) }, "Add main ingredient to cart")
-            )
-          ))
-        )
+        h(PageHeading, { eyebrow: "PERSONALIZED NUTRITION", title: "Recipe recommendations", description: "Recommendations are not connected in this build." }),
+        h("div", { className: "demo-notice" }, h(Icon, { name: "sparkles" }), h("span", null, "No recipes are loaded. Connect a recommendation service to add this feature.")),
+        h("section", { className: "panel empty-state" }, h("strong", null, "No recommendations yet"), h("span", null, "This page no longer displays sample recipe data."))
       );
     }
 
@@ -455,7 +551,7 @@
           h("div", { className: "cart-footer" }, h("span", null, "Items in cart"), h("strong", null, totalItems), h(Button, { onClick: () => notify("Checkout is not connected in this demo.") }, "Continue to checkout"))
         ),
         h("div", { className: "suggested-products" }, h("h2", null, "Thoughtful staples"),
-          h("div", { className: "suggested-row" }, ...data.inventory.filter((item) => item.quantity > 0).slice(0, 3).map((item) =>
+          h("div", { className: "suggested-row" }, ...inventory.filter((item) => item.quantity > 0).slice(0, 3).map((item) =>
             h("button", { className: "suggested-card", key: item.name, onClick: () => addToCart(item.name) },
               h("span", null, item.icon), h("strong", null, item.name), h(Icon, { name: "plus" })
             )))
@@ -464,28 +560,9 @@
     }
 
     function OrdersPage() {
-      const orders = patients.flatMap((patient) => patient.orders.map((order) => ({ ...order, patientId: patient.id }))).sort((a, b) => b.date.localeCompare(a.date));
       return h(React.Fragment, null,
-        h(PageHeading, { eyebrow: "FULFILLMENT", title: "Orders", description: "Follow recent grocery orders across fictional patient records." }),
-        h("div", { className: "order-stats" },
-          h("div", null, h("span", null, "TOTAL ORDERS"), h("strong", null, orders.length)),
-          h("div", null, h("span", null, "PROCESSING"), h("strong", { className: "text-orange" }, orders.filter((order) => order.status === "Processing").length)),
-          h("div", null, h("span", null, "DELIVERED"), h("strong", { className: "text-green" }, orders.filter((order) => order.status === "Delivered").length))
-        ),
-        h("section", { className: "panel table-panel" },
-          h("div", { className: "table-toolbar" }, h("div", null, h("h2", null, "Recent orders"), h("p", null, "No patient names or contact details are stored."))),
-          h("div", { className: "table-wrap" }, h("table", null,
-            h("thead", null, h("tr", null, h("th", null, "ORDER"), h("th", null, "PATIENT ID"), h("th", null, "ORDER DATE"), h("th", null, "ITEMS"), h("th", null, "STATUS"))),
-            h("tbody", null, ...orders.map((order) => h("tr", { key: order.id },
-              h("td", null, h("strong", null, order.id)),
-              h("td", null, h("span", { className: "table-patient-id" }, order.patientId)),
-              h("td", null, formatDate(order.date)),
-              h("td", null, `${order.items} items`),
-              h("td", null, h(Tag, { tone: order.status === "Delivered" ? "green" : "orange" }, h("span", { className: "tag-dot" }), order.status))
-            )))
-          )),
-          orders.length === 0 && h("div", { className: "empty-state" }, "No orders yet.")
-        )
+        h(PageHeading, { eyebrow: "FULFILLMENT", title: "Orders", description: "Order management is not connected to the database yet." }),
+        h("section", { className: "panel empty-state" }, h("strong", null, "No orders are stored"), h("span", null, "This page no longer displays sample order data."))
       );
     }
 
@@ -495,7 +572,7 @@
         h("section", { className: "panel settings-card" },
           h("div", { className: "settings-row" }, h("span", { className: "settings-icon" }, h(Icon, { name: "leaf" })), h("div", null, h("strong", null, "Workspace"), h("span", null, "Byte Bots · Epic Cure")), h(Tag, { tone: "green" }, "Demo")),
           h("div", { className: "settings-row" }, h("span", { className: "settings-icon" }, h(Icon, { name: "bell" })), h("div", null, h("strong", null, "Email updates"), h("span", null, "Receive demo activity summaries")), h("button", { className: `toggle ${emailUpdates ? "toggle-on" : ""}`, onClick: () => setEmailUpdates(!emailUpdates), role: "switch", "aria-checked": emailUpdates, "aria-label": "Toggle email updates" }, h("span", null))),
-          h("div", { className: "settings-privacy" }, h(Icon, { name: "check" }), h("span", null, "Privacy-first prototype: patient records exist only in React state and are cleared when the page is refreshed."))
+          h("div", { className: "settings-privacy" }, h(Icon, { name: "check" }), h("span", null, "Supabase stores patient UUIDs and product/inventory records. Orders and recommendations are not connected yet."))
         )
       );
     }
@@ -516,10 +593,14 @@
       h(Sidebar),
       h("main", { className: "main-area" },
         Topbar(),
-        h("div", { className: "main-content" }, CurrentPage()),
+        h("div", { className: "main-content" },
+          databaseError && h("div", { className: "database-warning", role: "alert" }, h(Icon, { name: "bell" }), databaseError),
+          CurrentPage()
+        ),
         h("footer", { className: "app-footer" }, h("span", null, "BYTE BOTS · EPIC CURE"), h("span", null, "Built for care. Powered by good food."))
       ),
       RegistrationModal(),
+      ProductModal(),
       toast && h("div", { className: "toast", role: "status" }, h(Icon, { name: "check" }), toast)
     );
   }

@@ -1,0 +1,17 @@
+{
+	"version": "2.0.0",
+	"tasks": [
+		{
+			"label": "Run Byte-Bots website",
+			"type": "shell",
+			"command": "node",
+			"args": [
+				"--env-file=.env",
+				"backend\\server.js"
+			],
+			"isBackground": true,
+			"problemMatcher": [],
+			"group": "build"
+		}
+	]
+}
