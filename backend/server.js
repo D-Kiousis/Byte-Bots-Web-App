@@ -17,6 +17,7 @@ const port = Number(process.env.PORT) || 3000;
 const frontendRoot = path.resolve(__dirname, "..", "frontend");
 const supabaseUrl = process.env.SUPABASE_URL?.replace(/\/+$/, "");
 const supabaseKey = process.env.SUPABASE_SECRET_KEY || process.env.SUPABASE_SERVICE_ROLE_KEY;
+const geminiConfigured = Boolean(process.env.GEMINI_API_KEY);
 const maxBodySize = 64 * 1024;
 const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const contentTypes = {
@@ -185,7 +186,8 @@ async function handleApi(req, res, url) {
     if (req.method === "GET" && url.pathname === "/api/health") {
         sendJson(res, 200, {
             status: "running",
-            databaseConfigured: Boolean(supabaseUrl && supabaseKey)
+            databaseConfigured: Boolean(supabaseUrl && supabaseKey),
+            geminiConfigured
         });
         return;
     }

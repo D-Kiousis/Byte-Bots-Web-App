@@ -325,6 +325,11 @@ td:last-child,th:last-child { padding-right: 19px; }
 .suggested-card .icon { width: 14px; height: 14px; color: #28897a; }
 .table-patient-id { color: #7f8d9b; font-size: 8px; }
 .settings-card { max-width: 720px; padding: 0 20px; }
+.gemini-settings { margin-bottom: 14px; }
+.settings-key-instructions { padding: 14px 0 17px; color: #78899a; font-size: 9px; line-height: 1.6; }
+.settings-key-instructions p { margin: 0 0 10px; }
+.settings-key-instructions pre { overflow-x: auto; margin: 0 0 10px; padding: 11px 12px; border: 1px solid #e8edef; border-radius: 7px; background: #f7f9fa; color: #41576b; font: 10px/1.5 ui-monospace,SFMono-Regular,Menlo,monospace; }
+.settings-key-note { color: #a07546; }
 .settings-row { min-height: 73px; display: flex; align-items: center; gap: 12px; border-bottom: 1px solid #eff2f3; }
 .settings-icon { width: 32px; height: 32px; display: grid; place-items: center; border-radius: 9px; background: #edf6f1; color: #3d8d73; }
 .settings-icon .icon { width: 16px; height: 16px; }

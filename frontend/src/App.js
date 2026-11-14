@@ -119,6 +119,7 @@
     const [pendingUuid, setPendingUuid] = useState(makeUuid);
     const [toast, setToast] = useState("");
     const [databaseError, setDatabaseError] = useState("");
+    const [geminiConfigured, setGeminiConfigured] = useState(null);
     const [registering, setRegistering] = useState(false);
     const [savingProduct, setSavingProduct] = useState(false);
     const [savingInventoryId, setSavingInventoryId] = useState(null);
@@ -138,6 +139,7 @@
     async function loadDatabaseData() {
       try {
         const health = await api("/api/health");
+        setGeminiConfigured(Boolean(health.geminiConfigured));
         if (!health.databaseConfigured) {
           throw new Error("Supabase is not configured. Add the project URL and rotated secret key to .env.");
         }
@@ -569,6 +571,20 @@
     function SettingsPage() {
       return h(React.Fragment, null,
         h(PageHeading, { eyebrow: "WORKSPACE", title: "Settings", description: "A few workspace details for this local demo prototype." }),
+        h("section", { className: "panel settings-card gemini-settings" },
+          h("div", { className: "settings-row" },
+            h("span", { className: "settings-icon" }, h(Icon, { name: "sparkles" })),
+            h("div", null, h("strong", null, "Gemini API key"), h("span", null, "Configure the key on the server, not in this browser.")),
+            h(Tag, { tone: geminiConfigured ? "green" : "orange" },
+              geminiConfigured === null ? "Checking…" : geminiConfigured ? "Key detected" : "Not configured")
+          ),
+          h("div", { className: "settings-key-instructions" },
+            h("p", null, "Open the project-root .env file and add this line. Replace the placeholder locally with your rotated key:"),
+            h("pre", null, "GEMINI_API_KEY=your-rotated-key"),
+            h("p", null, "Save the file and restart node backend/server.js. The server reads the key; it is never sent to or stored in frontend code."),
+            h("p", { className: "settings-key-note" }, "This status only checks whether the server sees a key. Gemini recipe generation is not connected yet.")
+          )
+        ),
         h("section", { className: "panel settings-card" },
           h("div", { className: "settings-row" }, h("span", { className: "settings-icon" }, h(Icon, { name: "leaf" })), h("div", null, h("strong", null, "Workspace"), h("span", null, "Byte Bots · Epic Cure")), h(Tag, { tone: "green" }, "Demo")),
           h("div", { className: "settings-row" }, h("span", { className: "settings-icon" }, h(Icon, { name: "bell" })), h("div", null, h("strong", null, "Email updates"), h("span", null, "Receive demo activity summaries")), h("button", { className: `toggle ${emailUpdates ? "toggle-on" : ""}`, onClick: () => setEmailUpdates(!emailUpdates), role: "switch", "aria-checked": emailUpdates, "aria-label": "Toggle email updates" }, h("span", null))),
