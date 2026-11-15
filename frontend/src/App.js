@@ -2,7 +2,9 @@
   const h = React.createElement;
   const { useEffect, useMemo, useState } = React;
 
-  const navItems = [
+  // What each role can open. The server enforces the same rules on every API
+  // call; hiding a menu item here is only a convenience.
+  const adminNav = [
     ["dashboard", "Dashboard", "grid"],
     ["patients", "Patients", "users"],
     ["inventory", "Grocery inventory", "box"],
@@ -10,6 +12,18 @@
     ["cart", "Shopping cart", "cart"],
     ["orders", "Orders", "clipboard"],
   ];
+  const patientNav = [
+    ["myprofile", "My profile", "users"],
+    ["groceries", "Groceries", "box"],
+    ["recipes", "Recipe recommendations", "sparkles"],
+    ["cart", "Shopping cart", "cart"],
+  ];
+  const allowedPages = {
+    admin: ["dashboard", "patients", "patientDetail", "inventory", "recipes", "cart", "orders", "settings"],
+    patient: ["myprofile", "groceries", "recipes", "cart"],
+  };
+  const homePage = { admin: "dashboard", patient: "myprofile" };
+
   const paths = {
     grid: "M3 3h7v7H3z M14 3h7v7h-7z M14 14h7v7h-7z M3 14h7v7H3z",
     users: "M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2 M9 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8 M22 21v-2a4 4 0 0 0-3-3.87 M16 3.13a4 4 0 0 1 0 7.75",
@@ -29,6 +43,7 @@
     leaf: "M20 4c-9 0-15 4-15 11a5 5 0 0 0 5 5c7 0 11-6 10-16z M5 20c2-5 6-8 11-11",
     package: "m7.5 4.3 9 5.2 M3 7l9 5 9-5 M12 22V12 M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z",
     clock: "M12 8v4l3 2 M22 12a10 10 0 1 1-20 0 10 10 0 0 1 20 0z",
+    logout: "M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4 M16 17l5-5-5-5 M21 12H9",
   };
 
   function Icon({ name, className = "icon" }) {
@@ -59,23 +74,61 @@
     return new Date(`${date}T12:00:00`).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
   }
 
+  // Set by the app so any request that comes back "not signed in" returns the
+  // person to the sign-in screen. Pass { quiet: true } to skip that.
+  let onUnauthorized = null;
+
   async function api(path, options = {}) {
+    const { quiet, ...fetchOptions } = options;
     const response = await fetch(path, {
-      ...options,
+      ...fetchOptions,
+      credentials: "same-origin",
       headers: {
-        ...(options.body ? { "Content-Type": "application/json" } : {}),
-        ...(options.headers || {}),
+        ...(fetchOptions.body ? { "Content-Type": "application/json" } : {}),
+        ...(fetchOptions.headers || {}),
       },
     });
-    const result = await response.json();
-    if (!response.ok) throw new Error(result.error || "Request failed.");
+    let result = null;
+    try {
+      result = await response.json();
+    } catch {
+      result = null;
+    }
+    if (response.status === 401 && !quiet && onUnauthorized) onUnauthorized();
+    if (!response.ok) {
+      const error = new Error((result && result.error) || "Request failed.");
+      error.status = response.status;
+      throw error;
+    }
     return result;
   }
 
+  const visuals = {
+    Grains: { icon: "🌾", color: "sand" },
+    Pantry: { icon: "🫘", color: "lilac" },
+    Produce: { icon: "🥬", color: "mint" },
+    Protein: { icon: "🐟", color: "peach" },
+  };
+  function visualFor(category) {
+    return visuals[category] || { icon: "🛒", color: "blue" };
+  }
+
+  const statusTones = { active: "green", pending: "orange", expired: "red" };
+  function statusLabel(status) {
+    return status.charAt(0).toUpperCase() + status.slice(1);
+  }
+
   function mapPatient(record) {
+    const account = Array.isArray(record.accounts) ? record.accounts[0] : record.accounts;
     return {
       id: record.id,
       registeredAt: record.created_at.slice(0, 10),
+      displayName: record.display_name || "",
+      householdSize: Number(record.household_size || 1),
+      enrollmentStatus: record.enrollment_status || "active",
+      login: account
+        ? { username: account.username, active: account.active, mustChange: account.must_change_password, lastLogin: account.last_login_at }
+        : null,
     };
   }
 
@@ -83,13 +136,7 @@
     const product = record.products || {};
     const quantity = Number(record.quantity);
     const reorderLevel = Number(record.reorder_level);
-    const visuals = {
-      Grains: { icon: "🌾", color: "sand" },
-      Pantry: { icon: "🫘", color: "lilac" },
-      Produce: { icon: "🥬", color: "mint" },
-      Protein: { icon: "🐟", color: "peach" },
-    };
-    const visual = visuals[product.category] || { icon: "🛒", color: "blue" };
+    const visual = visualFor(product.category);
 
     return {
       id: record.product_id,
@@ -107,11 +154,36 @@
     };
   }
 
+  // Patients get a smaller record: no exact quantities, SKUs or reorder levels.
+  function mapGrocery(record) {
+    const visual = visualFor(record.category);
+    return {
+      id: record.id,
+      name: record.name,
+      category: record.category || "Other",
+      unit: record.unit || "each",
+      calories: Number(record.calories_per_serving || 0),
+      sodium: Number(record.sodium_mg || 0),
+      limited: record.availability === "limited",
+      icon: visual.icon,
+      color: visual.color,
+    };
+  }
+
   function App() {
+    // account: undefined while checking the session, null when signed out.
+    const [account, setAccount] = useState(undefined);
+    const [myPatient, setMyPatient] = useState(null);
+    const [authError, setAuthError] = useState("");
+    const [signingIn, setSigningIn] = useState(false);
+    const [passwordError, setPasswordError] = useState("");
+    const [savingPassword, setSavingPassword] = useState(false);
     const [page, setPage] = useState("dashboard");
     const [patients, setPatients] = useState([]);
     const [inventory, setInventory] = useState([]);
+    const [groceries, setGroceries] = useState([]);
     const [selectedPatientId, setSelectedPatientId] = useState(null);
+    const [credentials, setCredentials] = useState(null);
     const [search, setSearch] = useState("");
     const [mobileNavOpen, setMobileNavOpen] = useState(false);
     const [registerOpen, setRegisterOpen] = useState(false);
@@ -123,76 +195,272 @@
     const [registering, setRegistering] = useState(false);
     const [savingProduct, setSavingProduct] = useState(false);
     const [savingInventoryId, setSavingInventoryId] = useState(null);
+    const [savingPatient, setSavingPatient] = useState(false);
+    const [savingLogin, setSavingLogin] = useState(false);
     const [emailUpdates, setEmailUpdates] = useState(true);
     const [cart, setCart] = useState([]);
 
+    const role = account ? account.role : null;
     const selectedPatient = patients.find((patient) => patient.id === selectedPatientId);
-    const filteredPatients = useMemo(() => patients.filter((patient) => {
-      return patient.id.toLowerCase().includes(search.trim().toLowerCase());
-    }), [patients, search]);
+    const groceryItems = role === "admin" ? inventory.filter((item) => item.quantity > 0) : groceries;
+    const filteredPatients = useMemo(() => {
+      const query = search.trim().toLowerCase();
+      return patients.filter((patient) => !query
+        || patient.id.toLowerCase().includes(query)
+        || patient.displayName.toLowerCase().includes(query)
+        || (patient.login && patient.login.username.toLowerCase().includes(query)));
+    }, [patients, search]);
 
     function notify(message) {
       setToast(message);
       window.setTimeout(() => setToast(""), 3000);
     }
 
-    async function loadDatabaseData() {
+    // Everything a person was looking at is cleared on sign-out, so the next
+    // person on a shared kiosk or phone never sees leftovers.
+    function resetSession(message) {
+      setAccount(null);
+      setMyPatient(null);
+      setPatients([]);
+      setInventory([]);
+      setGroceries([]);
+      setCart([]);
+      setSelectedPatientId(null);
+      setCredentials(null);
+      setSearch("");
+      setMobileNavOpen(false);
+      setRegisterOpen(false);
+      setProductOpen(false);
+      setDatabaseError("");
+      setPasswordError("");
+      setAuthError(message);
+    }
+
+    async function loadData(current) {
+      const who = current || account;
       try {
-        const health = await api("/api/health");
-        setGeminiConfigured(Boolean(health.geminiConfigured));
-        if (!health.databaseConfigured) {
-          throw new Error("Supabase is not configured. Add the project URL and rotated secret key to .env.");
+        if (who.role === "admin") {
+          const health = await api("/api/health");
+          setGeminiConfigured(Boolean(health.geminiConfigured));
+          if (!health.databaseConfigured) {
+            throw new Error("Supabase is not configured. Add the project URL and secret key to .env.");
+          }
+          const [patientRows, inventoryRows] = await Promise.all([
+            api("/api/patients"),
+            api("/api/inventory"),
+          ]);
+          setPatients(patientRows.map(mapPatient));
+          setInventory(inventoryRows.map(mapInventory));
+        } else {
+          const rows = await api("/api/groceries");
+          setGroceries(rows.map(mapGrocery));
         }
-        const [patientRows, inventoryRows] = await Promise.all([
-          api("/api/patients"),
-          api("/api/inventory"),
-        ]);
-        setPatients(patientRows.map(mapPatient));
-        setInventory(inventoryRows.map(mapInventory));
         setDatabaseError("");
         return true;
       } catch (error) {
-        setDatabaseError(error.message);
+        // A 401 already sent the person back to the sign-in screen.
+        if (error.status !== 401) setDatabaseError(error.message);
         return false;
       }
     }
 
+    async function startSession(me) {
+      setAuthError("");
+      setAccount(me.account);
+      setMyPatient(me.patient ? mapPatient(me.patient) : null);
+      setPage(homePage[me.account.role]);
+      if (!me.account.must_change_password) {
+        await loadData(me.account);
+      }
+    }
+
     useEffect(() => {
-      loadDatabaseData();
+      onUnauthorized = () => resetSession("Your session ended. Sign in again.");
+      (async () => {
+        try {
+          const me = await api("/api/auth/me", { quiet: true });
+          await startSession(me);
+        } catch {
+          setAccount(null);
+        }
+      })();
     }, []);
+
+    async function signIn(event) {
+      event.preventDefault();
+      const values = Object.fromEntries(new FormData(event.currentTarget).entries());
+      setSigningIn(true);
+      setAuthError("");
+      try {
+        const me = await api("/api/auth/login", {
+          method: "POST",
+          quiet: true,
+          body: JSON.stringify({ username: values.username, password: values.password }),
+        });
+        await startSession(me);
+      } catch (error) {
+        setAuthError(error.message);
+      } finally {
+        setSigningIn(false);
+      }
+    }
+
+    async function signOut() {
+      try {
+        await api("/api/auth/logout", { method: "POST", quiet: true });
+      } catch {
+        // The cookie may already be gone; either way this browser is signed out.
+      }
+      resetSession("");
+    }
+
+    async function changePassword(event) {
+      event.preventDefault();
+      const form = event.currentTarget;
+      const values = Object.fromEntries(new FormData(form).entries());
+      setPasswordError("");
+      if (values.new_password !== values.confirm_password) {
+        setPasswordError("The new passwords do not match.");
+        return;
+      }
+      if (values.new_password.length < 8) {
+        setPasswordError("Use at least 8 characters for the new password.");
+        return;
+      }
+      setSavingPassword(true);
+      try {
+        await api("/api/auth/change-password", {
+          method: "POST",
+          body: JSON.stringify({ current_password: values.current_password, new_password: values.new_password }),
+        });
+        form.reset();
+        const wasTemporary = account.must_change_password;
+        const updated = { ...account, must_change_password: false };
+        setAccount(updated);
+        if (wasTemporary) await loadData(updated);
+        notify("Password updated.");
+      } catch (error) {
+        setPasswordError(error.message);
+      } finally {
+        setSavingPassword(false);
+      }
+    }
 
     function goTo(nextPage) {
       setPage(nextPage);
       setMobileNavOpen(false);
       setSearch("");
+      setCredentials(null);
     }
 
     function showPatient(patient) {
       setSelectedPatientId(patient.id);
-      setPage("profile");
+      setPage("patientDetail");
       setMobileNavOpen(false);
+      setCredentials(null);
     }
 
     async function registerPatient(event) {
       event.preventDefault();
+      const values = Object.fromEntries(new FormData(event.currentTarget).entries());
       setRegistering(true);
+      let record;
       try {
-        const record = await api("/api/patients", {
+        record = await api("/api/patients", {
           method: "POST",
-          body: JSON.stringify({ id: pendingUuid }),
+          body: JSON.stringify({
+            id: pendingUuid,
+            display_name: values.display_name || "",
+            household_size: Number(values.household_size || 1),
+            enrollment_status: "active",
+          }),
         });
-        const patient = mapPatient(record);
-        setPatients((current) => [patient, ...current]);
-        setRegisterOpen(false);
-        setPendingUuid(makeUuid());
-        setDatabaseError("");
-        showPatient(patient);
-        notify("Patient ID saved to Supabase.");
       } catch (error) {
         setDatabaseError(error.message);
-        notify(`Patient ID could not be saved: ${error.message}`);
-      } finally {
+        notify(`Patient could not be saved: ${error.message}`);
         setRegistering(false);
+        return;
+      }
+
+      let created = null;
+      let loginError = "";
+      if (values.create_login === "on") {
+        try {
+          const login = await api(`/api/patients/${encodeURIComponent(record.id)}/account`, {
+            method: "POST",
+            body: JSON.stringify({}),
+          });
+          created = { patientId: record.id, username: login.username, password: login.temporary_password };
+        } catch (error) {
+          loginError = error.message;
+        }
+      }
+
+      setRegisterOpen(false);
+      setPendingUuid(makeUuid());
+      await loadData(account);
+      showPatient(record);
+      if (created) setCredentials(created);
+      notify(loginError ? `Patient saved. The login could not be created: ${loginError}` : "Patient saved.");
+      setRegistering(false);
+    }
+
+    async function savePatient(event) {
+      event.preventDefault();
+      const values = Object.fromEntries(new FormData(event.currentTarget).entries());
+      setSavingPatient(true);
+      try {
+        await api(`/api/patients/${encodeURIComponent(selectedPatientId)}`, {
+          method: "PATCH",
+          body: JSON.stringify({
+            display_name: values.display_name || "",
+            household_size: Number(values.household_size),
+            enrollment_status: values.enrollment_status,
+          }),
+        });
+        await loadData(account);
+        notify("Patient updated.");
+      } catch (error) {
+        notify(`Patient could not be updated: ${error.message}`);
+      } finally {
+        setSavingPatient(false);
+      }
+    }
+
+    async function createLogin(event) {
+      event.preventDefault();
+      const values = Object.fromEntries(new FormData(event.currentTarget).entries());
+      setSavingLogin(true);
+      try {
+        const login = await api(`/api/patients/${encodeURIComponent(selectedPatientId)}/account`, {
+          method: "POST",
+          body: JSON.stringify(values.username ? { username: values.username } : {}),
+        });
+        setCredentials({ patientId: selectedPatientId, username: login.username, password: login.temporary_password });
+        await loadData(account);
+        notify("Login created.");
+      } catch (error) {
+        notify(`Login could not be created: ${error.message}`);
+      } finally {
+        setSavingLogin(false);
+      }
+    }
+
+    async function resetPassword() {
+      if (!window.confirm("Reset this patient's password? Their current password stops working right away and they are signed out.")) return;
+      setSavingLogin(true);
+      try {
+        const login = await api(`/api/patients/${encodeURIComponent(selectedPatientId)}/reset-password`, {
+          method: "POST",
+          body: JSON.stringify({}),
+        });
+        setCredentials({ patientId: selectedPatientId, username: login.username, password: login.temporary_password });
+        await loadData(account);
+        notify("Password reset.");
+      } catch (error) {
+        notify(`Password could not be reset: ${error.message}`);
+      } finally {
+        setSavingLogin(false);
       }
     }
 
@@ -213,7 +481,7 @@
           }),
         });
         setProductOpen(false);
-        const refreshed = await loadDatabaseData();
+        const refreshed = await loadData(account);
         notify(refreshed ? "Product saved; its inventory starts at zero." : "Product saved, but the inventory list could not be refreshed.");
       } catch (error) {
         setDatabaseError(error.message);
@@ -235,7 +503,7 @@
             reorder_level: Number(values.reorder_level),
           }),
         });
-        const refreshed = await loadDatabaseData();
+        const refreshed = await loadData(account);
         notify(refreshed ? "Inventory updated." : "Inventory saved, but the list could not be refreshed.");
       } catch (error) {
         setDatabaseError(error.message);
@@ -256,6 +524,7 @@
     }
 
     function Sidebar() {
+      const items = role === "admin" ? adminNav : patientNav;
       return h(React.Fragment, null,
         mobileNavOpen && h("button", { className: "nav-scrim", "aria-label": "Close navigation", onClick: () => setMobileNavOpen(false) }),
         h("aside", { className: `sidebar ${mobileNavOpen ? "sidebar-open" : ""}` },
@@ -263,11 +532,11 @@
             h("div", { className: "brand-mark" }, "BB"),
             h("div", null, h("div", { className: "brand-name" }, "BYTE BOTS"), h("div", { className: "brand-subtitle" }, "EPIC CURE"))
           ),
-          h("div", { className: "workspace-label" }, "WORKSPACE"),
+          h("div", { className: "workspace-label" }, role === "admin" ? "ADMINISTRATOR" : "MY ACCOUNT"),
           h("nav", { className: "nav-list", "aria-label": "Main navigation" },
-            ...navItems.map(([id, label, icon]) => h("button", {
+            ...items.map(([id, label, icon]) => h("button", {
               key: id,
-              className: `nav-item ${page === id || (page === "profile" && id === "patients") ? "nav-item-active" : ""}`,
+              className: `nav-item ${page === id || (page === "patientDetail" && id === "patients") ? "nav-item-active" : ""}`,
               onClick: () => goTo(id),
             },
             h(Icon, { name: icon }), h("span", null, label),
@@ -278,8 +547,10 @@
               h("span", { className: "privacy-icon" }, h(Icon, { name: "leaf" })),
               h("div", null, h("strong", null, "Care, with purpose"), h("span", null, "Local prototype · no patient details"))
             ),
-            h("button", { className: `nav-item ${page === "settings" ? "nav-item-active" : ""}`, onClick: () => goTo("settings") },
-              h(Icon, { name: "settings" }), h("span", null, "Settings"))
+            role === "admin" && h("button", { className: `nav-item ${page === "settings" ? "nav-item-active" : ""}`, onClick: () => goTo("settings") },
+              h(Icon, { name: "settings" }), h("span", null, "Settings")),
+            h("button", { className: "nav-item", onClick: signOut },
+              h(Icon, { name: "logout" }), h("span", null, "Sign out"))
           )
         )
       );
@@ -291,8 +562,8 @@
         h("input", {
           value: search,
           onChange: (event) => setSearch(event.target.value),
-          placeholder: "Search by patient UUID",
-          "aria-label": "Search by patient UUID",
+          placeholder: "Search by name, username or ID",
+          "aria-label": "Search patients by name, username or ID",
         })
       ) : h("div", { className: "topbar-context" }, h("span", { className: "status-dot" }), "Demo environment");
       return h("header", { className: "topbar" },
@@ -300,9 +571,8 @@
         h("div", { className: "breadcrumb" }, "Workspace", h(Icon, { name: "chevron" }), h("strong", null, "Epic Cure")),
         h("div", { className: "topbar-right" },
           searchBox,
-          h("button", { className: "icon-button notification-button", onClick: () => notify("You’re all caught up."), "aria-label": "Notifications" },
-            h(Icon, { name: "bell" }), h("span", { className: "notification-dot" })),
-          h("div", { className: "avatar", "aria-label": "Demo staff account" }, "EC")
+          h("span", { className: "role-badge" }, role === "admin" ? "Administrator" : "Patient"),
+          h("div", { className: "avatar", title: account.username, "aria-label": `Signed in as ${account.username}` }, account.username.slice(0, 2).toUpperCase())
         )
       );
     }
@@ -311,6 +581,72 @@
       return h("div", { className: "page-heading" },
         h("div", null, eyebrow && h("div", { className: "eyebrow" }, eyebrow), h("h1", null, title), description && h("p", null, description)),
         actions && h("div", { className: "heading-actions" }, actions)
+      );
+    }
+
+    function PasswordForm() {
+      return h("form", { className: "auth-form", onSubmit: changePassword },
+        h("label", { className: "auth-label", htmlFor: "current_password" }, "Current password"),
+        h("input", { className: "auth-input", id: "current_password", name: "current_password", type: "password", autoComplete: "current-password", required: true }),
+        h("label", { className: "auth-label", htmlFor: "new_password" }, "New password"),
+        h("input", { className: "auth-input", id: "new_password", name: "new_password", type: "password", autoComplete: "new-password", minLength: 8, required: true }),
+        h("label", { className: "auth-label", htmlFor: "confirm_password" }, "Confirm new password"),
+        h("input", { className: "auth-input", id: "confirm_password", name: "confirm_password", type: "password", autoComplete: "new-password", minLength: 8, required: true }),
+        h("p", { className: "auth-hint" }, "Use at least 8 characters."),
+        passwordError && h("div", { className: "auth-error", role: "alert" }, passwordError),
+        h(Button, { type: "submit", className: "auth-submit", disabled: savingPassword }, savingPassword ? "Saving..." : "Save new password")
+      );
+    }
+
+    function LoginScreen() {
+      return h("main", { className: "auth-screen" },
+        h("section", { className: "auth-card", "aria-labelledby": "signin-title" },
+          h("div", { className: "auth-brand" },
+            h("div", { className: "brand-mark" }, "BB"),
+            h("div", null, h("div", { className: "brand-name" }, "BYTE BOTS"), h("div", { className: "brand-subtitle" }, "EPIC CURE"))
+          ),
+          h("h1", { id: "signin-title" }, "Sign in"),
+          h("p", { className: "auth-lead" }, "Use the username and password Epic Cure staff gave you."),
+          authError && h("div", { className: "auth-error", role: "alert" }, authError),
+          h("form", { className: "auth-form", onSubmit: signIn },
+            h("label", { className: "auth-label", htmlFor: "username" }, "Username"),
+            h("input", { className: "auth-input", id: "username", name: "username", autoComplete: "username", autoCapitalize: "none", autoCorrect: "off", spellCheck: false, required: true, autoFocus: true }),
+            h("label", { className: "auth-label", htmlFor: "password" }, "Password"),
+            h("input", { className: "auth-input", id: "password", name: "password", type: "password", autoComplete: "current-password", required: true }),
+            h(Button, { type: "submit", className: "auth-submit", disabled: signingIn }, signingIn ? "Signing in..." : "Sign in")
+          ),
+          h("p", { className: "auth-note" }, "Demo environment. Use synthetic data only.")
+        )
+      );
+    }
+
+    function ChangePasswordScreen() {
+      return h("main", { className: "auth-screen" },
+        h("section", { className: "auth-card", "aria-labelledby": "password-title" },
+          h("div", { className: "auth-brand" },
+            h("div", { className: "brand-mark" }, "BB"),
+            h("div", null, h("div", { className: "brand-name" }, "BYTE BOTS"), h("div", { className: "brand-subtitle" }, "EPIC CURE"))
+          ),
+          h("h1", { id: "password-title" }, "Choose a new password"),
+          h("p", { className: "auth-lead" }, `You are signed in as ${account.username} with a temporary password. Choose your own to continue.`),
+          PasswordForm(),
+          h("button", { className: "auth-link", onClick: signOut }, "Sign out")
+        )
+      );
+    }
+
+    function CredentialsNotice() {
+      if (!credentials || credentials.patientId !== selectedPatientId) return null;
+      return h("section", { className: "panel credentials-panel", role: "status" },
+        h("div", { className: "credentials-head" },
+          h("strong", null, "Temporary sign-in details"),
+          h("button", { className: "text-button", onClick: () => setCredentials(null) }, "Hide")
+        ),
+        h("p", null, "Give these to the patient now. The password is shown only once. They choose their own password the first time they sign in."),
+        h("dl", { className: "credentials-list" },
+          h("div", null, h("dt", null, "Username"), h("dd", null, credentials.username)),
+          h("div", null, h("dt", null, "Temporary password"), h("dd", null, credentials.password))
+        )
       );
     }
 
@@ -350,7 +686,7 @@
               ...[
                 ["plus", "quick-purple", "Register patient", "Create a new care record", () => setRegisterOpen(true)],
                 ["box", "quick-green", "View inventory", "Check product availability", () => goTo("inventory")],
-                ["users", "quick-orange", "View patient IDs", "Browse saved records", () => goTo("patients")],
+                ["users", "quick-orange", "View patients", "Browse saved records", () => goTo("patients")],
                 ["settings", "quick-blue", "Database setup", "Review connection settings", () => goTo("settings")],
               ].map(([icon, color, title, detail, action]) =>
                 h("button", { className: "quick-action", key: title, onClick: action },
@@ -368,7 +704,7 @@
             h("div", { className: "activity-list" },
               h("div", { className: "activity-item" },
                 h("span", { className: "activity-dot activity-purple" }, h(Icon, { name: "users" })),
-                h("div", { className: "activity-copy" }, h("strong", null, "Patient IDs"), h("span", null, "Patient UUIDs and creation dates")),
+                h("div", { className: "activity-copy" }, h("strong", null, "Patients"), h("span", null, "Patient records and logins")),
                 h("time", null, patients.length)
               ),
               h("div", { className: "activity-item" },
@@ -384,31 +720,36 @@
 
     function PatientsPage() {
       return h(React.Fragment, null,
-        h(PageHeading, { eyebrow: "CARE NETWORK", title: "Patients", description: "Create and search patient UUIDs. No personal or health information is stored.", actions: h(Button, { icon: "plus", onClick: () => setRegisterOpen(true) }, "Create patient ID") }),
+        h(PageHeading, { eyebrow: "CARE NETWORK", title: "Patients", description: "Create patient records and their sign-ins. Keep names to a first name or nickname; no health details are stored.", actions: h(Button, { icon: "plus", onClick: () => setRegisterOpen(true) }, "Add patient") }),
         h("div", { className: "patient-summary-row" },
           h("div", { className: "patient-summary-card" }, h("span", { className: "summary-icon summary-violet" }, h(Icon, { name: "users" })), h("div", null, h("strong", null, patients.length), h("span", null, "Total records"))),
-          h("div", { className: "privacy-inline" }, h(Icon, { name: "check" }), "Only UUIDs and creation dates are saved")
+          h("div", { className: "privacy-inline" }, h(Icon, { name: "check" }), "Only administrators can see this page")
         ),
         h("section", { className: "panel table-panel" },
           h("div", { className: "table-toolbar" },
-            h("div", null, h("h2", null, "Patient directory"), h("p", null, "Search by randomly generated patient UUID.")),
-            h("button", { className: "text-button", onClick: loadDatabaseData }, "Refresh")
+            h("div", null, h("h2", null, "Patient directory"), h("p", null, "Search by name, username or patient ID.")),
+            h("button", { className: "text-button", onClick: () => loadData() }, "Refresh")
           ),
           h("div", { className: "table-wrap" },
             h("table", null,
-              h("thead", null, h("tr", null, h("th", null, "PATIENT ID"), h("th", null, "CREATED"), h("th", null, " "))),
+              h("thead", null, h("tr", null, h("th", null, "PATIENT"), h("th", null, "HOUSEHOLD"), h("th", null, "STATUS"), h("th", null, "LOGIN"), h("th", null, "CREATED"), h("th", null, " "))),
               h("tbody", null, filteredPatients.length
                 ? filteredPatients.map((patient) => h("tr", { key: patient.id },
-                  h("td", null, h("div", { className: "patient-id-cell" }, h("span", { className: "patient-mini-avatar" }, h(Icon, { name: "users" })), h("span", null, h("strong", null, "Patient"), h("small", null, patient.id)))),
+                  h("td", null, h("div", { className: "patient-id-cell" }, h("span", { className: "patient-mini-avatar" }, h(Icon, { name: "users" })), h("span", null, h("strong", null, patient.displayName || "Patient"), h("small", null, patient.id)))),
+                  h("td", null, patient.householdSize),
+                  h("td", null, h(Tag, { tone: statusTones[patient.enrollmentStatus] || "neutral" }, h("span", { className: "tag-dot" }), statusLabel(patient.enrollmentStatus))),
+                  h("td", null, patient.login
+                    ? h("span", null, patient.login.username, patient.login.mustChange ? h(Tag, { tone: "orange" }, "Temporary password") : null)
+                    : h(Tag, null, "No login")),
                   h("td", null, formatDate(patient.registeredAt)),
-                  h("td", null, h("button", { className: "row-action", onClick: () => showPatient(patient), "aria-label": "View patient ID" }, "View ID", h(Icon, { name: "arrow" })))
+                  h("td", null, h("button", { className: "row-action", onClick: () => showPatient(patient), "aria-label": `Open ${patient.displayName || "patient"} record` }, "Open", h(Icon, { name: "arrow" })))
                 ))
-                : h("tr", null, h("td", { colSpan: 3, className: "patient-empty" }, "No patient IDs found. Create one to get started."))
+                : h("tr", null, h("td", { colSpan: 6, className: "patient-empty" }, "No patients found. Add one to get started."))
               )
             )
           )
         ),
-        h("p", { className: "privacy-footnote" }, h(Icon, { name: "leaf" }), "Patient IDs are identifiers only—not authentication credentials or access controls.")
+        h("p", { className: "privacy-footnote" }, h(Icon, { name: "leaf" }), "Patient IDs are identifiers only, not passwords or access controls.")
       );
     }
 
@@ -417,15 +758,25 @@
       return h("div", { className: "modal-backdrop", onMouseDown: (event) => { if (event.target === event.currentTarget) setRegisterOpen(false); } },
         h("section", { className: "modal", role: "dialog", "aria-modal": "true", "aria-labelledby": "register-title" },
           h("div", { className: "modal-header" },
-            h("div", null, h("span", { className: "eyebrow" }, "NEW RECORD"), h("h2", { id: "register-title" }, "Create a patient ID"), h("p", null, "Only the UUID and creation date are saved.")),
-            h("button", { className: "icon-button", onClick: () => setRegisterOpen(false), "aria-label": "Close registration form" }, h(Icon, { name: "close" }))
+            h("div", null, h("span", { className: "eyebrow" }, "NEW RECORD"), h("h2", { id: "register-title" }, "Add a patient"), h("p", null, "Saved: patient ID, optional first name or nickname, household size and enrollment status.")),
+            h("button", { className: "icon-button", onClick: () => setRegisterOpen(false), "aria-label": "Close form" }, h(Icon, { name: "close" }))
           ),
           h("form", { onSubmit: registerPatient, className: "registration-form" },
             h("label", { className: "form-label" }, "Patient UUID",
               h("div", { className: "uuid-preview" }, h("span", null, pendingUuid), h("small", null, "Generated automatically"))
             ),
-            h("div", { className: "form-privacy" }, h(Icon, { name: "leaf" }), h("span", null, "No names, contact details, or medical information are collected or stored.")),
-            h("div", { className: "modal-actions" }, h(Button, { variant: "secondary", onClick: () => setRegisterOpen(false) }, "Cancel"), h(Button, { type: "submit", icon: "plus", disabled: registering }, registering ? "Saving..." : "Create patient ID"))
+            h("label", { className: "form-label" }, "First name or nickname (optional)",
+              h("input", { className: "form-control", name: "display_name", maxLength: 60, autoComplete: "off" })
+            ),
+            h("label", { className: "form-label" }, "Household size",
+              h("input", { className: "form-control", name: "household_size", type: "number", min: "1", max: "20", step: "1", defaultValue: "1", required: true })
+            ),
+            h("label", { className: "checkbox-line" },
+              h("input", { type: "checkbox", name: "create_login", defaultChecked: true }),
+              h("span", null, "Create a sign-in for this patient")
+            ),
+            h("div", { className: "form-privacy" }, h(Icon, { name: "leaf" }), h("span", null, "Do not enter full names, contact details, or medical information.")),
+            h("div", { className: "modal-actions" }, h(Button, { variant: "secondary", onClick: () => setRegisterOpen(false) }, "Cancel"), h(Button, { type: "submit", icon: "plus", disabled: registering }, registering ? "Saving..." : "Add patient"))
           )
         )
       );
@@ -476,19 +827,96 @@
       );
     }
 
-    function PatientProfile() {
-      if (!selectedPatient) return h("div", { className: "empty-state profile-empty" }, h("strong", null, "Choose a patient ID"), h(Button, { onClick: () => goTo("patients") }, "Back to patients"));
+    // Administrator view of one patient: profile, and their sign-in.
+    function PatientDetail() {
+      if (!selectedPatient) return h("div", { className: "empty-state profile-empty" }, h("strong", null, "Choose a patient"), h(Button, { onClick: () => goTo("patients") }, "Back to patients"));
+      const patient = selectedPatient;
       return h(React.Fragment, null,
         h("button", { className: "back-link", onClick: () => goTo("patients") }, h(Icon, { name: "chevron" }), "Back to patients"),
-        h(PageHeading, { eyebrow: "PATIENT DIRECTORY", title: "Patient ID", description: "This UUID is an identifier only, not an access credential." }),
+        h(PageHeading, { title: patient.displayName || "Patient", description: "Update this patient's details and manage their sign-in." }),
         h("section", { className: "profile-hero panel" },
           h("div", { className: "profile-avatar" }, h(Icon, { name: "users" })),
           h("div", { className: "profile-identity" },
             h("span", { className: "eyebrow" }, "PATIENT UUID"),
-            h("h2", null, selectedPatient.id),
-            h("span", null, `Created ${formatDate(selectedPatient.registeredAt)}`)
+            h("h2", null, patient.id),
+            h("span", null, `Created ${formatDate(patient.registeredAt)}`)
+          )
+        ),
+        CredentialsNotice(),
+        h("div", { className: "detail-grid" },
+          h("section", { className: "panel detail-panel" },
+            h("h2", null, "Profile"),
+            h("form", {
+              className: "registration-form",
+              key: `${patient.id}-${patient.displayName}-${patient.householdSize}-${patient.enrollmentStatus}`,
+              onSubmit: savePatient,
+            },
+              h("label", { className: "form-label" }, "First name or nickname",
+                h("input", { className: "form-control", name: "display_name", maxLength: 60, defaultValue: patient.displayName, autoComplete: "off" })
+              ),
+              h("label", { className: "form-label" }, "Household size",
+                h("input", { className: "form-control", name: "household_size", type: "number", min: "1", max: "20", step: "1", defaultValue: patient.householdSize, required: true })
+              ),
+              h("label", { className: "form-label" }, "Enrollment status",
+                h("select", { className: "form-control", name: "enrollment_status", defaultValue: patient.enrollmentStatus },
+                  h("option", { value: "active" }, "Active"),
+                  h("option", { value: "pending" }, "Pending"),
+                  h("option", { value: "expired" }, "Expired")
+                )
+              ),
+              h("div", { className: "modal-actions" }, h(Button, { type: "submit", disabled: savingPatient }, savingPatient ? "Saving..." : "Save changes"))
+            )
+          ),
+          h("section", { className: "panel detail-panel" },
+            h("h2", null, "Sign-in"),
+            patient.login
+              ? h(React.Fragment, null,
+                h("dl", { className: "facts-list" },
+                  h("div", null, h("dt", null, "Username"), h("dd", null, patient.login.username)),
+                  h("div", null, h("dt", null, "Password"), h("dd", null, patient.login.mustChange ? "Temporary, not changed yet" : "Chosen by the patient")),
+                  h("div", null, h("dt", null, "Last signed in"), h("dd", null, patient.login.lastLogin ? new Date(patient.login.lastLogin).toLocaleString("en-US") : "Never"))
+                ),
+                h(Button, { variant: "secondary", onClick: resetPassword, disabled: savingLogin }, savingLogin ? "Working..." : "Reset password")
+              )
+              : h("form", { className: "registration-form", onSubmit: createLogin },
+                h("p", { className: "detail-note" }, "This patient cannot sign in yet."),
+                h("label", { className: "form-label" }, "Username (optional)",
+                  h("input", { className: "form-control", name: "username", maxLength: 32, autoComplete: "off", autoCapitalize: "none", placeholder: "Leave blank to generate one" })
+                ),
+                h("div", { className: "modal-actions" }, h(Button, { type: "submit", icon: "plus", disabled: savingLogin }, savingLogin ? "Creating..." : "Create sign-in"))
+              )
           )
         )
+      );
+    }
+
+    // Patient view of their own information.
+    function MyProfilePage() {
+      const me = myPatient;
+      return h(React.Fragment, null,
+        h(PageHeading, { title: me && me.displayName ? `Hi, ${me.displayName}` : "My profile", description: "Your details at Epic Cure." }),
+        !me
+          ? h("section", { className: "panel empty-state" }, h("strong", null, "We could not find your record"), h("span", null, "Ask a volunteer to check your account."))
+          : h(React.Fragment, null,
+            h("section", { className: "profile-hero panel" },
+              h("div", { className: "profile-avatar" }, h(Icon, { name: "users" })),
+              h("div", { className: "profile-identity" },
+                h("span", { className: "eyebrow" }, "YOUR PATIENT ID"),
+                h("h2", null, me.id),
+                h("span", null, `Member since ${formatDate(me.registeredAt)}`)
+              )
+            ),
+            h("section", { className: "info-grid", "aria-label": "Your details" },
+              h("div", { className: "info-tile" }, h("span", null, "Household size"), h("strong", null, me.householdSize)),
+              h("div", { className: "info-tile" }, h("span", null, "Enrollment"), h(Tag, { tone: statusTones[me.enrollmentStatus] || "neutral" }, h("span", { className: "tag-dot" }), statusLabel(me.enrollmentStatus))),
+              h("div", { className: "info-tile" }, h("span", null, "Username"), h("strong", null, account.username))
+            ),
+            h("section", { className: "panel detail-panel password-panel" },
+              h("h2", null, "Change password"),
+              PasswordForm()
+            ),
+            h("p", { className: "privacy-footnote" }, h(Icon, { name: "leaf" }), "Your dietary plan will appear here once your care team adds it. No health information is stored yet.")
+          )
       );
     }
 
@@ -503,7 +931,7 @@
           h("div", null, h("span", null, "OUT OF STOCK"), h("strong", { className: "text-red" }, outOfStock))
         ),
         h("section", { className: "panel table-panel" },
-          h("div", { className: "table-toolbar" }, h("div", null, h("h2", null, "Products"), h("p", null, "Edit available quantity and its low-stock threshold.")), h("button", { className: "text-button", onClick: loadDatabaseData }, "Refresh")),
+          h("div", { className: "table-toolbar" }, h("div", null, h("h2", null, "Products"), h("p", null, "Edit available quantity and its low-stock threshold.")), h("button", { className: "text-button", onClick: () => loadData() }, "Refresh")),
           h("div", { className: "table-wrap" }, h("table", null,
             h("thead", null, h("tr", null, h("th", null, "PRODUCT"), h("th", null, "CATEGORY"), h("th", null, "QTY AVAILABLE"), h("th", null, "STOCK STATUS"), h("th", null, "NUTRITION / SERVING"))),
             h("tbody", null, inventory.length
@@ -530,6 +958,31 @@
       );
     }
 
+    // Read-only list for patients: only what is on the shelves right now.
+    function GroceriesPage() {
+      return h(React.Fragment, null,
+        h(PageHeading, { title: "Groceries", description: "What is on the shelves right now. Availability changes during the day." }),
+        h("section", { className: "panel grocery-panel" },
+          h("div", { className: "table-toolbar" },
+            h("div", null, h("h2", null, "Available now"), h("p", null, `${groceries.length} items`)),
+            h("button", { className: "text-button", onClick: () => loadData() }, "Refresh")
+          ),
+          groceries.length
+            ? h("div", { className: "grocery-grid" }, ...groceries.map((item) => h("article", { className: "grocery-card", key: item.id },
+              h("span", { className: `product-emoji product-${item.color}` }, item.icon),
+              h("div", { className: "grocery-info" },
+                h("strong", null, item.name),
+                h("span", null, `${item.category} · per ${item.unit}`),
+                h("span", { className: "nutrition-cell" }, `${item.calories} cal`, h("i", null), `${item.sodium} mg sodium`)
+              ),
+              h(Tag, { tone: item.limited ? "orange" : "green" }, h("span", { className: "tag-dot" }), item.limited ? "Limited" : "In stock"),
+              h(Button, { variant: "secondary", icon: "plus", onClick: () => addToCart(item.name) }, "Add to cart")
+            )))
+            : h("div", { className: "empty-state" }, h("strong", null, "Nothing is listed right now"), h("span", null, "Check again soon, or ask a volunteer."))
+        )
+      );
+    }
+
     function RecipesPage() {
       return h(React.Fragment, null,
         h(PageHeading, { eyebrow: "PERSONALIZED NUTRITION", title: "Recipe recommendations", description: "Recommendations are not connected in this build." }),
@@ -541,7 +994,7 @@
     function CartPage() {
       const totalItems = cart.reduce((total, item) => total + item.quantity, 0);
       return h(React.Fragment, null,
-        h(PageHeading, { eyebrow: "GROCERY PLANNING", title: "Shopping cart", description: "A lightweight demo basket—no checkout or order submission is connected." }),
+        h(PageHeading, { eyebrow: "GROCERY PLANNING", title: "Shopping cart", description: "A lightweight demo basket. No checkout or order submission is connected." }),
         h("section", { className: "panel cart-panel" },
           h("div", { className: "table-toolbar" }, h("div", null, h("h2", null, "Your basket"), h("p", null, `${totalItems} items in this demo cart`)), h(Tag, { tone: "green" }, "Demo only")),
           cart.length
@@ -549,11 +1002,11 @@
               h("span", { className: "cart-item-icon" }, "🛒"), h("strong", null, item.name), h("span", { className: "cart-quantity" }, `Qty ${item.quantity}`),
               h("button", { className: "remove-button", onClick: () => setCart((current) => current.filter((entry) => entry.name !== item.name)), "aria-label": `Remove ${item.name}` }, h(Icon, { name: "close" }))
             )))
-            : h("div", { className: "empty-state" }, h("strong", null, "Your basket is empty"), h("span", null, "Explore inventory to add grocery items.")),
+            : h("div", { className: "empty-state" }, h("strong", null, "Your basket is empty"), h("span", null, "Explore the grocery list to add items.")),
           h("div", { className: "cart-footer" }, h("span", null, "Items in cart"), h("strong", null, totalItems), h(Button, { onClick: () => notify("Checkout is not connected in this demo.") }, "Continue to checkout"))
         ),
         h("div", { className: "suggested-products" }, h("h2", null, "Thoughtful staples"),
-          h("div", { className: "suggested-row" }, ...inventory.filter((item) => item.quantity > 0).slice(0, 3).map((item) =>
+          h("div", { className: "suggested-row" }, ...groceryItems.slice(0, 3).map((item) =>
             h("button", { className: "suggested-card", key: item.name, onClick: () => addToCart(item.name) },
               h("span", null, item.icon), h("strong", null, item.name), h(Icon, { name: "plus" })
             )))
@@ -579,16 +1032,16 @@
               geminiConfigured === null ? "Checking…" : geminiConfigured ? "Key detected" : "Not configured")
           ),
           h("div", { className: "settings-key-instructions" },
-            h("p", null, "Open the project-root .env file and add this line. Replace the placeholder locally with your rotated key:"),
-            h("pre", null, "GEMINI_API_KEY=your-rotated-key"),
+            h("p", null, "Open the project-root .env file and add this line. Replace the placeholder locally with your key:"),
+            h("pre", null, "GEMINI_API_KEY=your-key"),
             h("p", null, "Save the file and restart node backend/server.js. The server reads the key; it is never sent to or stored in frontend code."),
-            h("p", { className: "settings-key-note" }, "This status only checks whether the server sees a key. Gemini recipe generation is not connected yet.")
+            h("p", { className: "settings-key-note" }, "This status only checks whether the server sees a key. Open /api/ai/ping to test the connection.")
           )
         ),
         h("section", { className: "panel settings-card" },
           h("div", { className: "settings-row" }, h("span", { className: "settings-icon" }, h(Icon, { name: "leaf" })), h("div", null, h("strong", null, "Workspace"), h("span", null, "Byte Bots · Epic Cure")), h(Tag, { tone: "green" }, "Demo")),
           h("div", { className: "settings-row" }, h("span", { className: "settings-icon" }, h(Icon, { name: "bell" })), h("div", null, h("strong", null, "Email updates"), h("span", null, "Receive demo activity summaries")), h("button", { className: `toggle ${emailUpdates ? "toggle-on" : ""}`, onClick: () => setEmailUpdates(!emailUpdates), role: "switch", "aria-checked": emailUpdates, "aria-label": "Toggle email updates" }, h("span", null))),
-          h("div", { className: "settings-privacy" }, h(Icon, { name: "check" }), h("span", null, "Supabase stores patient UUIDs and product/inventory records. Orders and recommendations are not connected yet."))
+          h("div", { className: "settings-privacy" }, h(Icon, { name: "check" }), h("span", null, "Supabase stores patient records, sign-ins and product/inventory records. Orders and recommendations are not connected yet."))
         )
       );
     }
@@ -596,14 +1049,25 @@
     const pages = {
       dashboard: Dashboard,
       patients: PatientsPage,
-      profile: PatientProfile,
+      patientDetail: PatientDetail,
+      myprofile: MyProfilePage,
       inventory: InventoryPage,
+      groceries: GroceriesPage,
       recipes: RecipesPage,
       cart: CartPage,
       orders: OrdersPage,
       settings: SettingsPage,
     };
-    const CurrentPage = pages[page] || Dashboard;
+
+    // Still checking the session.
+    if (account === undefined) {
+      return h("main", { className: "auth-screen" }, h("p", { className: "auth-lead", role: "status" }, "Loading…"));
+    }
+    if (account === null) return LoginScreen();
+    if (account.must_change_password) return ChangePasswordScreen();
+
+    const activePage = allowedPages[role].includes(page) ? page : homePage[role];
+    const CurrentPage = pages[activePage];
 
     return h("div", { className: "app-shell" },
       h(Sidebar),
@@ -615,8 +1079,8 @@
         ),
         h("footer", { className: "app-footer" }, h("span", null, "BYTE BOTS · EPIC CURE"), h("span", null, "Built for care. Powered by good food."))
       ),
-      RegistrationModal(),
-      ProductModal(),
+      role === "admin" ? RegistrationModal() : null,
+      role === "admin" ? ProductModal() : null,
       toast && h("div", { className: "toast", role: "status" }, h(Icon, { name: "check" }), toast)
     );
   }
