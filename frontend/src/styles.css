@@ -199,6 +199,9 @@ td:last-child,th:last-child { padding-right: 19px; }
 .form-fieldset legend { margin-bottom: 0; }
 .field-help { margin: 5px 0 9px; color: #9aa5ae; font-size: 9px; }
 .checkbox-grid { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); gap: 7px; }
+.form-checkbox { min-height: 31px; display: flex; align-items: center; gap: 7px; color: #647689; font-size: 9px; font-weight: 500; }
+.form-checkbox input { width: 14px; height: 14px; accent-color: #16877d; }
+.form-checkbox-review { margin-top: 9px; padding: 8px; border-radius: 7px; background: #f3f8f6; }
 .checkbox-option { min-height: 37px; display: flex; align-items: center; gap: 8px; padding: 7px 9px; border: 1px solid #e9eef0; border-radius: 7px; color: #738293; font-size: 9px; cursor: pointer; }
 .checkbox-option input { position: absolute; opacity: 0; pointer-events: none; }
 .custom-checkbox { width: 15px; height: 15px; display: grid; place-items: center; border: 1px solid #d6dfe2; border-radius: 4px; background: #fff; }
@@ -280,6 +283,18 @@ td:last-child,th:last-child { padding-right: 19px; }
 .compact-generated { margin: -5px 0 15px; padding: 9px 12px; color: #5b776a; font-size: 9px; }
 .compact-generated .generated-check { width: 22px; height: 22px; flex-basis: 22px; }
 .recipe-grid { display: grid; grid-template-columns: repeat(3,minmax(0,1fr)); align-items: stretch; gap: 14px; }
+.ai-recipe-card { overflow: hidden; padding: 0; }
+.ai-recipe-card .recipe-art { min-height: 110px; }
+.ai-recipe-card .recipe-body h2 { min-height: 0; }
+.recipe-steps { display: grid; gap: 7px; margin: 0 0 12px; padding-left: 18px; color: #718294; font-size: 9px; line-height: 1.5; }
+.recipe-why { margin: 0 0 12px; color: #87949f; font-size: 8px; line-height: 1.5; }
+.recipe-note { margin: 0 0 14px; padding: 10px 12px; border: 1px solid #e4eee8; border-radius: 8px; background: #f5faf7; color: #648173; font-size: 9px; line-height: 1.5; }
+.allergen-editor { margin: 7px 0 0 36px; }
+.allergen-editor summary { color: #478678; cursor: pointer; font-size: 8px; }
+.allergen-editor form { min-width: 220px; padding: 9px; border: 1px solid #e9eef0; border-radius: 7px; background: #fff; }
+.allergen-editor .checkbox-grid { grid-template-columns: 1fr 1fr; }
+.allergen-editor .form-checkbox { font-size: 8px; }
+.allergen-editor .button { width: 100%; margin-top: 6px; }
 .recipe-card { overflow: hidden; padding: 0; }
 .recipe-art { position: relative; min-height: 140px; display: grid; place-items: center; overflow: hidden; }
 .recipe-mint { background: linear-gradient(135deg,#e9f3e9,#d4e8d7); }

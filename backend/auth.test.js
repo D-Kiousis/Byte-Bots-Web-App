@@ -7,7 +7,7 @@ const test = require("node:test");
 const assert = require("node:assert/strict");
 const { randomUUID } = require("node:crypto");
 const auth = require("./auth");
-const { createFakeDb } = require("./test-support/fake-postgrest");
+const { createFakeDb } = require("./fake-postgrest");
 
 class HttpError extends Error {
     constructor(status, message) {

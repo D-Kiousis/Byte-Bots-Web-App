@@ -42,6 +42,27 @@ test("validateRecipes keeps a valid recipe", () => {
     assert.equal(dropped.length, 0);
 });
 
+test("validateRecipes keeps five distinct safe recipes", () => {
+    const cart = [item("Brown rice", "Grains", 5)];
+    const ideas = Array.from({ length: 6 }, (_, index) => ({
+        ...goodRecipe(cart),
+        title: index === 5 ? "Meal 0" : `Meal ${index}`
+    }));
+    const { recipes } = ai.validateRecipes({ recipes: ideas }, context(cart, []));
+    assert.equal(recipes.length, 5);
+    assert.equal(new Set(recipes.map((recipe) => recipe.title)).size, 5);
+});
+
+test("Gemini prompt contains general recipe data, not a patient profile", () => {
+    const prompt = ai.buildPrompt({
+        tier: null,
+        cart: [item("Brown rice", "Grains", 5)],
+        candidates: []
+    });
+    assert.match(prompt, /no patient health profile is provided/);
+    assert.doesNotMatch(prompt, /diabetes|peanut/i);
+});
+
 test("validateRecipes drops a recipe that invents an ingredient id", () => {
     const cart = [item("Brown rice", "Grains", 5)];
     const bad = goodRecipe(cart, [item("Imaginary cheese", "Dairy", 0)]);
@@ -73,7 +94,8 @@ test("fallback recipes pass the same validation as model output", () => {
     const candidates = [item("Spinach", "Produce", 20), item("Lentils", "Protein", 10)];
     const fallback = ai.fallbackRecipes({ cart, candidates });
     const { recipes } = ai.validateRecipes({ recipes: fallback }, context(cart, candidates));
-    assert.equal(recipes.length, 1);
+    assert.equal(fallback.length, 5);
+    assert.equal(recipes.length, 5);
     assert.deepEqual(recipes[0].missing_ids.length, 2);
 });
 

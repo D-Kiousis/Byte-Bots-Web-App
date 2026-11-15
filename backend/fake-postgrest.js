@@ -91,8 +91,14 @@ function createFakeDb() {
         const now = new Date().toISOString();
         const base = { id: randomUUID(), created_at: now };
         const defaults = {
-            patients: { display_name: null, household_size: 1, enrollment_status: "active" },
-            products: { sku: null, category: null, unit: "each", calories_per_serving: 0, sodium_mg: 0, active: true },
+            patients: {
+                display_name: null, household_size: 1, enrollment_status: "active",
+                health_conditions: [], allergens: []
+            },
+            products: {
+                sku: null, category: null, unit: "each", calories_per_serving: 0,
+                sodium_mg: 0, allergens: [], allergen_info_verified: false, active: true
+            },
             inventory: { quantity: 0, reorder_level: 0, updated_at: now },
             accounts: {
                 patient_id: null, must_change_password: false, active: true,

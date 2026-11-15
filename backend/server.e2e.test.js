@@ -9,7 +9,7 @@ const assert = require("node:assert/strict");
 const { spawn } = require("node:child_process");
 const net = require("node:net");
 const path = require("node:path");
-const { startFakeSupabase } = require("./test-support/fake-postgrest");
+const { startFakeSupabase } = require("./fake-postgrest");
 
 const ADMIN_PASSWORD = "Start-pass-1";
 const ADMIN_NEW_PASSWORD = "Admin-new-pass-2";
@@ -145,8 +145,14 @@ test("the administrator must replace the bootstrap password before doing anythin
 
 test("an administrator can add products and set stock", async () => {
     const make = async (body) => (await api("POST", "/api/products", { cookie: state.admin, body })).data;
-    state.rice = await make({ name: "Brown rice", category: "Grains", unit: "bag", calories_per_serving: 160, sodium_mg: 5 });
-    state.spinach = await make({ name: "Spinach", category: "Produce", unit: "bunch", calories_per_serving: 7, sodium_mg: 24 });
+    state.rice = await make({
+        name: "Brown rice", category: "Grains", unit: "bag",
+        calories_per_serving: 160, sodium_mg: 5, allergens: [], allergen_info_verified: true
+    });
+    state.spinach = await make({
+        name: "Spinach", category: "Produce", unit: "bunch",
+        calories_per_serving: 7, sodium_mg: 24, allergens: [], allergen_info_verified: true
+    });
     state.soup = await make({ name: "Canned soup", category: "Pantry", sku: "S-1", sodium_mg: 890 });
     assert.ok(state.rice.id && state.spinach.id && state.soup.id);
 
@@ -201,8 +207,22 @@ test("a patient must choose a new password, then sees only their own information
     assert.equal(me.data.patient.id, state.patient.id);
     assert.equal(me.data.patient.display_name, "Sam");
     assert.equal(me.data.patient.household_size, 4);
+    const savedProfile = await api("PATCH", "/api/patient/profile", {
+        cookie,
+        body: { health_conditions: ["diabetes"], allergens: ["peanuts"] }
+    });
+    assert.equal(savedProfile.status, 200);
+    assert.deepEqual(savedProfile.data.health_conditions, ["diabetes"]);
+    assert.deepEqual(savedProfile.data.allergens, ["peanuts"]);
+    const updatedMe = await api("GET", "/api/auth/me", { cookie });
+    assert.deepEqual(updatedMe.data.patient.health_conditions, ["diabetes"]);
+    assert.deepEqual(updatedMe.data.patient.allergens, ["peanuts"]);
+    assert.equal((await api("PATCH", "/api/patient/profile", { cookie, body: { allergens: ["unknown"] } })).status, 400);
     assert.equal(me.text.includes(state.otherPatient.id), false, "no other patient's data");
     assert.equal(me.text.includes("password_hash"), false);
+    const adminPatients = await api("GET", "/api/patients", { cookie: state.admin });
+    assert.equal(adminPatients.text.includes("health_conditions"), false, "admin patient listings omit health details");
+    assert.equal(adminPatients.text.includes("allergens"), false, "admin patient listings omit allergy details");
 });
 
 test("a patient is refused on every administrator route", async () => {
@@ -226,6 +246,10 @@ test("a patient is refused on every administrator route", async () => {
     }
     assert.equal(fake.tables().products.some((product) => product.name === "Sneaky item"), false);
     assert.equal(fake.tables().inventory.find((row) => row.product_id === state.rice.id).quantity, 20);
+    assert.equal((await api("PATCH", "/api/patient/profile", {
+        cookie: state.admin,
+        body: { allergens: ["peanuts"] }
+    })).status, 403);
     assert.deepEqual((await api("GET", "/api/health", { cookie })).data, { status: "running" });
 });
 
@@ -251,10 +275,72 @@ test("the grocery list shows only what is available, with no stock details", asy
 });
 
 test("patients can ask for recipe ideas, signed-out visitors cannot", async () => {
-    const asPatient = await api("POST", "/api/ai/recipes", { cookie: state.patientCookie, body: { cart_ids: [] } });
-    assert.equal(asPatient.status, 400);
+    const asPatient = await api("POST", "/api/ai/recipes", { cookie: state.patientCookie, body: {} });
+    assert.equal(asPatient.status, 200);
+    assert.equal(asPatient.data.recipes.length, 5);
+    assert.equal(asPatient.data.profile_fields_sent_to_model, false);
     const signedOut = await api("POST", "/api/ai/recipes", { body: { cart_ids: [] } });
     assert.equal(signedOut.status, 401);
+});
+
+test("recipe generation uses only allergen-compatible in-stock products", async () => {
+    const updated = await api("PATCH", `/api/products/${state.soup.id}`, {
+        cookie: state.admin,
+        body: { allergens: ["peanuts"], allergen_info_verified: true }
+    });
+    assert.equal(updated.status, 200);
+    assert.equal((await api("PATCH", `/api/inventory/${state.soup.id}`, {
+        cookie: state.admin,
+        body: { quantity: 3, reorder_level: 1 }
+    })).status, 200);
+
+    const result = await api("POST", "/api/ai/recipes", { cookie: state.patientCookie, body: {} });
+    assert.equal(result.status, 200);
+    assert.equal(result.data.recipes.length, 5);
+    assert.equal(result.data.eligible_products_count, 2);
+    assert.equal(result.data.excluded_products_count, 1);
+    assert.equal(result.data.excluded_count, 0);
+    assert.ok(result.data.recipes.every((recipe) =>
+        recipe.uses.every((item) => item.id !== state.soup.id)
+    ));
+
+    await api("PATCH", `/api/inventory/${state.soup.id}`, {
+        cookie: state.admin,
+        body: { quantity: 0, reorder_level: 5 }
+    });
+});
+
+test("patient recipe ideas exclude known allergens and unreviewed products", async () => {
+    const updated = await api("PATCH", `/api/products/${state.spinach.id}`, {
+        cookie: state.admin,
+        body: { allergens: ["peanuts"], allergen_info_verified: true }
+    });
+    assert.equal(updated.status, 200);
+    await api("PATCH", `/api/products/${state.soup.id}`, {
+        cookie: state.admin,
+        body: { allergens: [], allergen_info_verified: false }
+    });
+    await api("PATCH", `/api/inventory/${state.soup.id}`, {
+        cookie: state.admin,
+        body: { quantity: 3, reorder_level: 1 }
+    });
+
+    const result = await api("POST", "/api/ai/recipes", { cookie: state.patientCookie, body: {} });
+    assert.equal(result.status, 200);
+    assert.equal(result.data.recipes.length, 0, "a known allergen is excluded, even when that leaves too few ingredients");
+    assert.equal(result.data.excluded_count, 0);
+    assert.equal(result.data.eligible_products_count, 1);
+    assert.equal(result.data.excluded_products_count, 2);
+    assert.equal(result.data.reason, "insufficient_eligible_inventory");
+
+    await api("PATCH", `/api/inventory/${state.soup.id}`, {
+        cookie: state.admin,
+        body: { quantity: 0, reorder_level: 5 }
+    });
+    await api("PATCH", `/api/products/${state.spinach.id}`, {
+        cookie: state.admin,
+        body: { allergens: [], allergen_info_verified: true }
+    });
 });
 
 test("an administrator reset signs the patient out and forces a new password", async () => {

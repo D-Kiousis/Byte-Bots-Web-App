@@ -24,8 +24,22 @@ const sessionHours = Number(process.env.SESSION_HOURS) || 8;
 const maxBodySize = 64 * 1024;
 const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const enrollmentStatuses = ["active", "pending", "expired"];
+const healthConditions = ["diabetes", "hypertension", "heart_disease", "chronic_kidney_disease"];
+const allergens = ["milk", "eggs", "fish", "shellfish", "tree_nuts", "peanuts", "wheat", "soy", "sesame"];
 const patientColumns = "id,created_at,display_name,household_size,enrollment_status";
-const productColumns = "id,name,sku,category,unit,calories_per_serving,sodium_mg,active,created_at";
+const patientSelfColumns = `${patientColumns},health_conditions,allergens`;
+const productColumns = "id,name,sku,category,unit,calories_per_serving,sodium_mg,allergens,allergen_info_verified,active,created_at";
+const allergenTerms = {
+    milk: ["milk", "dairy", "cheese", "butter", "cream", "whey", "casein"],
+    eggs: ["egg", "eggs"],
+    fish: ["fish", "anchovy", "salmon", "tuna"],
+    shellfish: ["shellfish", "shrimp", "prawn", "crab", "lobster", "crayfish"],
+    tree_nuts: ["tree nut", "almond", "walnut", "pecan", "cashew", "pistachio", "hazelnut"],
+    peanuts: ["peanut", "groundnut"],
+    wheat: ["wheat", "flour", "breadcrumbs"],
+    soy: ["soy", "soya", "tofu", "edamame"],
+    sesame: ["sesame", "tahini"]
+};
 const contentTypes = {
     ".css": "text/css; charset=utf-8",
     ".html": "text/html; charset=utf-8",
@@ -120,6 +134,14 @@ function nonNegativeNumber(value, fieldName) {
         throw new HttpError(400, `${fieldName} must be a non-negative number.`);
     }
     return value;
+}
+
+function enumList(value, fieldName, allowed) {
+    if (!Array.isArray(value) || value.length > allowed.length
+        || !value.every((item) => typeof item === "string" && allowed.includes(item))) {
+        throw new HttpError(400, `${fieldName} must contain only supported options.`);
+    }
+    return [...new Set(value)];
 }
 
 function patientFields(body) {
@@ -230,7 +252,7 @@ async function loadProfile(account) {
     let patient = null;
     if (account.role === "patient" && account.patient_id) {
         const rows = await supabaseRequest(
-            `patients?id=eq.${encodeURIComponent(account.patient_id)}&select=${patientColumns}`
+            `patients?id=eq.${encodeURIComponent(account.patient_id)}&select=${patientSelfColumns}`
         );
         patient = rows && rows[0] ? rows[0] : null;
     }
@@ -326,6 +348,33 @@ async function handleApi(req, res, url) {
         return;
     }
 
+    if (method === "PATCH" && pathname === "/api/patient/profile") {
+        const { account } = await requireAccount(req);
+        if (account.role !== "patient" || !account.patient_id) {
+            throw new HttpError(403, "Patient access is required.");
+        }
+        const body = requireObject(await readJson(req));
+        const updates = {};
+        if (Object.hasOwn(body, "health_conditions")) {
+            updates.health_conditions = enumList(body.health_conditions, "health_conditions", healthConditions);
+        }
+        if (Object.hasOwn(body, "allergens")) {
+            updates.allergens = enumList(body.allergens, "allergens", allergens);
+        }
+        if (Object.keys(updates).length === 0) {
+            throw new HttpError(400, "Provide health_conditions or allergens to update.");
+        }
+        const rows = await supabaseRequest(
+            `patients?id=eq.${encodeURIComponent(account.patient_id)}&select=health_conditions,allergens`,
+            { method: "PATCH", body: updates, prefer: "return=representation" }
+        );
+        if (!rows || rows.length === 0) {
+            throw new HttpError(404, "Patient profile not found.");
+        }
+        sendJson(res, 200, rows[0]);
+        return;
+    }
+
     // ---- Patients (administrators only) ---------------------------------
     if (method === "GET" && pathname === "/api/patients") {
         await requireAdmin(req);
@@ -407,6 +456,9 @@ async function handleApi(req, res, url) {
         if (!name) {
             throw new HttpError(400, "Product name is required.");
         }
+        if (body.allergen_info_verified !== undefined && typeof body.allergen_info_verified !== "boolean") {
+            throw new HttpError(400, "allergen_info_verified must be a boolean.");
+        }
 
         const product = await supabaseRequest(`products?select=${productColumns}`, {
             method: "POST",
@@ -420,7 +472,9 @@ async function handleApi(req, res, url) {
                     : nonNegativeNumber(body.calories_per_serving, "calories_per_serving"),
                 sodium_mg: body.sodium_mg === undefined
                     ? 0
-                    : nonNegativeNumber(body.sodium_mg, "sodium_mg")
+                    : nonNegativeNumber(body.sodium_mg, "sodium_mg"),
+                allergens: body.allergens === undefined ? [] : enumList(body.allergens, "allergens", allergens),
+                allergen_info_verified: body.allergen_info_verified === true
             },
             prefer: "return=representation"
         });
@@ -428,10 +482,42 @@ async function handleApi(req, res, url) {
         return;
     }
 
+    const productMatch = pathname.match(/^\/api\/products\/([0-9a-f-]{36})$/i);
+    if (method === "PATCH" && productMatch) {
+        await requireAdmin(req);
+        const productId = productMatch[1];
+        if (!uuidPattern.test(productId)) {
+            throw new HttpError(400, "A valid product ID is required.");
+        }
+        const body = requireObject(await readJson(req));
+        const updates = {};
+        if (Object.hasOwn(body, "allergens")) {
+            updates.allergens = enumList(body.allergens, "allergens", allergens);
+        }
+        if (Object.hasOwn(body, "allergen_info_verified")) {
+            if (typeof body.allergen_info_verified !== "boolean") {
+                throw new HttpError(400, "allergen_info_verified must be a boolean.");
+            }
+            updates.allergen_info_verified = body.allergen_info_verified;
+        }
+        if (Object.keys(updates).length === 0) {
+            throw new HttpError(400, "Provide allergens or allergen_info_verified to update.");
+        }
+        const rows = await supabaseRequest(
+            `products?id=eq.${encodeURIComponent(productId)}&select=${productColumns}`,
+            { method: "PATCH", body: updates, prefer: "return=representation" }
+        );
+        if (!rows || rows.length === 0) {
+            throw new HttpError(404, "Product not found.");
+        }
+        sendJson(res, 200, rows[0]);
+        return;
+    }
+
     if (method === "GET" && pathname === "/api/inventory") {
         await requireAdmin(req);
         const inventory = await supabaseRequest(
-            "inventory?select=id,product_id,quantity,reorder_level,updated_at,products(id,name,sku,category,unit,calories_per_serving,sodium_mg,active)&order=updated_at.desc&limit=500"
+            "inventory?select=id,product_id,quantity,reorder_level,updated_at,products(id,name,sku,category,unit,calories_per_serving,sodium_mg,allergens,allergen_info_verified,active)&order=updated_at.desc&limit=500"
         );
         sendJson(res, 200, inventory);
         return;
@@ -477,7 +563,7 @@ async function handleApi(req, res, url) {
     if (method === "GET" && pathname === "/api/groceries") {
         await requireAccount(req);
         const rows = await supabaseRequest(
-            "inventory?select=product_id,quantity,reorder_level,products(name,category,unit,calories_per_serving,sodium_mg,active)&quantity=gt.0&limit=500"
+            "inventory?select=product_id,quantity,reorder_level,products(name,category,unit,calories_per_serving,sodium_mg,allergens,allergen_info_verified,active)&quantity=gt.0&limit=500"
         );
         const groceries = rows
             .filter((row) => row.products && row.products.active)
@@ -488,6 +574,8 @@ async function handleApi(req, res, url) {
                 unit: row.products.unit,
                 calories_per_serving: row.products.calories_per_serving,
                 sodium_mg: row.products.sodium_mg,
+                allergens: row.products.allergens || [],
+                allergen_info_verified: row.products.allergen_info_verified === true,
                 availability: Number(row.quantity) <= Number(row.reorder_level) ? "limited" : "in_stock"
             }))
             .sort((a, b) => a.name.localeCompare(b.name));
@@ -503,12 +591,102 @@ async function handleApi(req, res, url) {
     }
 
     if (method === "POST" && pathname === "/api/ai/recipes") {
-        await requireAccount(req);
+        const { account } = await requireAccount(req);
         const body = requireObject(await readJson(req));
         try {
-            sendJson(res, 200, await ai.handleRecipeRequest(body, () => supabaseRequest(
-                "inventory?select=product_id,quantity,products(name,category,unit,calories_per_serving,sodium_mg,active)&limit=500"
-            )));
+            const inventoryRows = await supabaseRequest(
+                "inventory?select=product_id,quantity,products(name,category,unit,calories_per_serving,sodium_mg,allergens,allergen_info_verified,active)&limit=500"
+            );
+            if (account.role === "patient") {
+                if (!account.patient_id) {
+                    throw new HttpError(403, "Patient profile is not linked to this account.");
+                }
+                const profile = await supabaseRequest(
+                    `patients?id=eq.${encodeURIComponent(account.patient_id)}&select=allergens`
+                );
+                if (!profile || !profile[0]) {
+                    throw new HttpError(404, "Patient profile not found.");
+                }
+                const selectedAllergens = Array.isArray(profile[0].allergens) ? profile[0].allergens : [];
+                const inStock = inventoryRows
+                    .filter((row) => row.products && row.products.active !== false && Number(row.quantity) > 0);
+                if (inStock.length === 0) {
+                    sendJson(res, 200, {
+                        source: "none",
+                        recipes: [],
+                        excluded_count: 0,
+                        eligible_products_count: 0,
+                        excluded_products_count: 0,
+                        reason: "no_stock"
+                    });
+                    return;
+                }
+                const isProductAllowed = (product) => {
+                    if (!product || product.active === false) return false;
+                    if (selectedAllergens.length && product.allergen_info_verified !== true) return false;
+                    const productAllergens = Array.isArray(product.allergens) ? product.allergens : [];
+                    return !productAllergens.some((allergen) => selectedAllergens.includes(allergen));
+                };
+                const eligibleInStock = inStock.filter((row) => isProductAllowed(row.products));
+                if (eligibleInStock.length < 2) {
+                    sendJson(res, 200, {
+                        source: "none",
+                        recipes: [],
+                        excluded_count: 0,
+                        eligible_products_count: eligibleInStock.length,
+                        excluded_products_count: inStock.length - eligibleInStock.length,
+                        reason: "insufficient_eligible_inventory"
+                    });
+                    return;
+                }
+                const available = eligibleInStock.slice(0, 30);
+                const byId = new Map(inventoryRows.map((row) => [row.product_id, row]));
+                const result = await ai.handleRecipeRequest(
+                    { cart_ids: available.map((row) => row.product_id) },
+                    async () => inventoryRows,
+                    (item) => isProductAllowed(byId.get(item.id)?.products)
+                );
+                const terms = selectedAllergens.flatMap((allergen) => allergenTerms[allergen] || []);
+                const safeRecipes = result.recipes.filter((recipe) => {
+                    if (recipe.uses_cart_ids.length < 2) return false;
+                    const ids = [...recipe.uses_cart_ids, ...recipe.missing_ids];
+                    if (ids.some((id) => !isProductAllowed(byId.get(id)?.products))) return false;
+                    const text = `${recipe.title} ${recipe.why_it_fits} ${recipe.steps.join(" ")}`.toLowerCase();
+                    return !terms.some((term) => text.includes(term));
+                }).slice(0, 5);
+                const safeItems = available.map((row) => ({
+                    id: row.product_id,
+                    name: row.products.name,
+                    category: row.products.category || "Other",
+                    calories: Number(row.products.calories_per_serving || 0),
+                    sodium_mg: Number(row.products.sodium_mg || 0)
+                }));
+                const fallbackRecipes = safeItems.length >= 2
+                    ? ai.fallbackRecipes({ cart: safeItems, candidates: [] }).map((recipe) => ({
+                    ...recipe,
+                    uses: recipe.uses_cart_ids.map((id) => {
+                        const item = safeItems.find((candidate) => candidate.id === id);
+                        return { id, name: item.name, category: item.category };
+                    }),
+                    missing: [],
+                    source: "fallback"
+                }))
+                    : [];
+                const recipes = [
+                    ...safeRecipes.map((recipe) => ({ ...recipe, source: result.source })),
+                    ...fallbackRecipes
+                ].slice(0, 5);
+                sendJson(res, 200, {
+                    ...result,
+                    recipes,
+                    excluded_count: result.recipes.length - safeRecipes.length,
+                    eligible_products_count: eligibleInStock.length,
+                    excluded_products_count: inStock.length - eligibleInStock.length,
+                    profile_fields_sent_to_model: false
+                });
+                return;
+            }
+            sendJson(res, 200, await ai.handleRecipeRequest(body, async () => inventoryRows));
         } catch (error) {
             throw error instanceof ai.AiError ? new HttpError(error.status, error.message) : error;
         }

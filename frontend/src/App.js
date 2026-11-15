@@ -23,6 +23,23 @@
     patient: ["myprofile", "groceries", "recipes", "cart"],
   };
   const homePage = { admin: "dashboard", patient: "myprofile" };
+  const healthConditionOptions = [
+    ["diabetes", "Diabetes"],
+    ["hypertension", "Hypertension"],
+    ["heart_disease", "Heart disease"],
+    ["chronic_kidney_disease", "Chronic kidney disease"],
+  ];
+  const allergenOptions = [
+    ["milk", "Milk"],
+    ["eggs", "Eggs"],
+    ["fish", "Fish"],
+    ["shellfish", "Crustacean shellfish"],
+    ["tree_nuts", "Tree nuts"],
+    ["peanuts", "Peanuts"],
+    ["wheat", "Wheat"],
+    ["soy", "Soy"],
+    ["sesame", "Sesame"],
+  ];
 
   const paths = {
     grid: "M3 3h7v7H3z M14 3h7v7h-7z M14 14h7v7h-7z M3 14h7v7H3z",
@@ -126,6 +143,8 @@
       displayName: record.display_name || "",
       householdSize: Number(record.household_size || 1),
       enrollmentStatus: record.enrollment_status || "active",
+      healthConditions: Array.isArray(record.health_conditions) ? record.health_conditions : [],
+      allergens: Array.isArray(record.allergens) ? record.allergens : [],
       login: account
         ? { username: account.username, active: account.active, mustChange: account.must_change_password, lastLogin: account.last_login_at }
         : null,
@@ -147,6 +166,8 @@
       unit: product.unit || "each",
       calories: Number(product.calories_per_serving || 0),
       sodium: Number(product.sodium_mg || 0),
+      allergens: Array.isArray(product.allergens) ? product.allergens : [],
+      allergenInfoVerified: product.allergen_info_verified === true,
       stock: quantity === 0 ? "Out of stock" : quantity <= reorderLevel ? "Low stock" : "In stock",
       icon: visual.icon,
       color: visual.color,
@@ -164,6 +185,8 @@
       unit: record.unit || "each",
       calories: Number(record.calories_per_serving || 0),
       sodium: Number(record.sodium_mg || 0),
+      allergens: Array.isArray(record.allergens) ? record.allergens : [],
+      allergenInfoVerified: record.allergen_info_verified === true,
       limited: record.availability === "limited",
       icon: visual.icon,
       color: visual.color,
@@ -196,9 +219,14 @@
     const [savingProduct, setSavingProduct] = useState(false);
     const [savingInventoryId, setSavingInventoryId] = useState(null);
     const [savingPatient, setSavingPatient] = useState(false);
+    const [savingHealthProfile, setSavingHealthProfile] = useState(false);
     const [savingLogin, setSavingLogin] = useState(false);
     const [emailUpdates, setEmailUpdates] = useState(true);
     const [cart, setCart] = useState([]);
+    const [recipeResults, setRecipeResults] = useState([]);
+    const [recipeError, setRecipeError] = useState("");
+    const [recipeNote, setRecipeNote] = useState("");
+    const [generatingRecipes, setGeneratingRecipes] = useState(false);
 
     const role = account ? account.role : null;
     const selectedPatient = patients.find((patient) => patient.id === selectedPatientId);
@@ -225,6 +253,9 @@
       setInventory([]);
       setGroceries([]);
       setCart([]);
+      setRecipeResults([]);
+      setRecipeError("");
+      setRecipeNote("");
       setSelectedPatientId(null);
       setCredentials(null);
       setSearch("");
@@ -427,6 +458,72 @@
       }
     }
 
+    async function saveHealthProfile(event) {
+      event.preventDefault();
+      const values = new FormData(event.currentTarget);
+      const healthConditions = values.getAll("health_conditions");
+      const selectedAllergens = values.getAll("allergens");
+      setSavingHealthProfile(true);
+      try {
+        await api("/api/patient/profile", {
+          method: "PATCH",
+          body: JSON.stringify({
+            health_conditions: healthConditions,
+            allergens: selectedAllergens,
+          }),
+        });
+        setMyPatient((current) => current
+          ? { ...current, healthConditions, allergens: selectedAllergens }
+          : current);
+        notify("Your health profile was saved.");
+      } catch (error) {
+        notify(`Your health profile could not be saved: ${error.message}`);
+      } finally {
+        setSavingHealthProfile(false);
+      }
+    }
+
+    async function generateRecipeRecommendations() {
+      setGeneratingRecipes(true);
+      setRecipeError("");
+      setRecipeResults([]);
+      try {
+        const result = await api("/api/ai/recipes", {
+          method: "POST",
+          body: JSON.stringify({}),
+        });
+        setRecipeResults(Array.isArray(result.recipes)
+          ? result.recipes.map((recipe) => ({ ...recipe, source: recipe.source || result.source }))
+          : []);
+        setRecipeNote(result.excluded_count
+          ? `${result.excluded_count} recipe idea${result.excluded_count === 1 ? "" : "s"} did not pass allergen screening.`
+          : result.excluded_products_count
+            ? `${result.excluded_products_count} in-stock product${result.excluded_products_count === 1 ? " was" : "s were"} left out because labels were unreviewed or conflicted with your selections.`
+            : result.source === "none"
+              ? ""
+          : result.source === "gemini"
+            ? "Generated from Gemini model knowledge; this is not live web search."
+            : "Showing general fallback ideas because Gemini was unavailable.");
+        if (!result.recipes || result.recipes.length === 0) {
+          if (result.reason === "insufficient_eligible_inventory") {
+            setRecipeError(result.eligible_products_count === 1
+              ? "Only one in-stock product currently meets the allergen checks. Ask staff to review labels or add another compatible product."
+              : "No in-stock products currently meet the allergen checks. Ask staff to review package labels or update stock.");
+          } else if (result.reason === "no_stock") {
+            setRecipeError("There are no in-stock products to build recipe ideas from.");
+          } else if (result.excluded_count) {
+            setRecipeError("No generated recipe ideas passed allergen screening.");
+          } else {
+            setRecipeError("There are not enough eligible in-stock products to build recipe ideas from.");
+          }
+        }
+      } catch (error) {
+        setRecipeError(error.message);
+      } finally {
+        setGeneratingRecipes(false);
+      }
+    }
+
     async function createLogin(event) {
       event.preventDefault();
       const values = Object.fromEntries(new FormData(event.currentTarget).entries());
@@ -478,6 +575,8 @@
             unit: values.unit,
             calories_per_serving: Number(values.calories_per_serving || 0),
             sodium_mg: Number(values.sodium_mg || 0),
+            allergens: new FormData(event.currentTarget).getAll("product_allergens"),
+            allergen_info_verified: values.allergen_info_verified === "on",
           }),
         });
         setProductOpen(false);
@@ -488,6 +587,24 @@
         notify(`Product could not be saved: ${error.message}`);
       } finally {
         setSavingProduct(false);
+      }
+    }
+
+    async function updateProductAllergens(event, item) {
+      event.preventDefault();
+      const values = new FormData(event.currentTarget);
+      try {
+        await api(`/api/products/${encodeURIComponent(item.id)}`, {
+          method: "PATCH",
+          body: JSON.stringify({
+            allergens: values.getAll("product_allergens"),
+            allergen_info_verified: values.get("allergen_info_verified") === "on",
+          }),
+        });
+        const refreshed = await loadData(account);
+        notify(refreshed ? "Allergen information updated." : "Allergen information saved, but inventory could not be refreshed.");
+      } catch (error) {
+        notify(`Allergen information could not be saved: ${error.message}`);
       }
     }
 
@@ -817,6 +934,20 @@
                 h("input", { className: "form-control", name: "sodium_mg", type: "number", min: "0", step: "0.01", defaultValue: "0", required: true })
               )
             ),
+            h("fieldset", { className: "form-fieldset" },
+              h("legend", null, "Contains (from package label)"),
+              h("p", { className: "field-help" }, "Select every listed allergen. Do not guess if the label is unclear."),
+              h("div", { className: "checkbox-grid" }, ...allergenOptions.map(([value, label]) =>
+                h("label", { className: "form-checkbox", key: value },
+                  h("input", { type: "checkbox", name: "product_allergens", value }),
+                  h("span", null, label)
+                )
+              ))
+            ),
+            h("label", { className: "form-checkbox form-checkbox-review" },
+              h("input", { type: "checkbox", name: "allergen_info_verified" }),
+              h("span", null, "I reviewed the package label and verified the allergen information")
+            ),
             h("div", { className: "form-privacy" }, h(Icon, { name: "box" }), h("span", null, "New inventory starts at zero. Set the quantity and low-stock threshold from the inventory table.")),
             h("div", { className: "modal-actions" },
               h(Button, { variant: "secondary", onClick: () => setProductOpen(false) }, "Cancel"),
@@ -893,6 +1024,12 @@
     // Patient view of their own information.
     function MyProfilePage() {
       const me = myPatient;
+      const renderOptions = (options, selected, name) => h("div", { className: "checkbox-grid" },
+        ...options.map(([value, label]) => h("label", { className: "form-checkbox", key: value },
+          h("input", { type: "checkbox", name, value, defaultChecked: selected.includes(value) }),
+          h("span", null, label)
+        ))
+      );
       return h(React.Fragment, null,
         h(PageHeading, { title: me && me.displayName ? `Hi, ${me.displayName}` : "My profile", description: "Your details at Epic Cure." }),
         !me
@@ -911,11 +1048,29 @@
               h("div", { className: "info-tile" }, h("span", null, "Enrollment"), h(Tag, { tone: statusTones[me.enrollmentStatus] || "neutral" }, h("span", { className: "tag-dot" }), statusLabel(me.enrollmentStatus))),
               h("div", { className: "info-tile" }, h("span", null, "Username"), h("strong", null, account.username))
             ),
+            h("section", { className: "panel detail-panel profile-health" },
+              h("h2", null, "Health and allergy profile"),
+              h("p", { className: "detail-note" }, "Only you can view and update these selections."),
+              h("form", { className: "registration-form", onSubmit: saveHealthProfile },
+                h("fieldset", { className: "form-fieldset" },
+                  h("legend", null, "Health conditions"),
+                  h("p", { className: "field-help" }, "For your care team's context; this prototype does not use conditions to make medical diet claims."),
+                  renderOptions(healthConditionOptions, me.healthConditions, "health_conditions")
+                ),
+                h("fieldset", { className: "form-fieldset" },
+                  h("legend", null, "Allergens"),
+                  h("p", { className: "field-help" }, "Select any of the nine listed allergens. Recommendations are filtered using staff-reviewed product labels; other allergens are not supported. Always check packaging and cross-contact warnings."),
+                  renderOptions(allergenOptions, me.allergens, "allergens")
+                ),
+                h("div", { className: "form-privacy" }, h(Icon, { name: "leaf" }), h("span", null, "Your conditions and allergens are saved to your Epic Cure profile and are not sent to Gemini. Conditions are not used as medical diet rules; recommendations are general food ideas, not medical advice.")),
+                h("div", { className: "modal-actions" }, h(Button, { type: "submit", disabled: savingHealthProfile }, savingHealthProfile ? "Saving..." : "Save profile"))
+              )
+            ),
             h("section", { className: "panel detail-panel password-panel" },
               h("h2", null, "Change password"),
               PasswordForm()
             ),
-            h("p", { className: "privacy-footnote" }, h(Icon, { name: "leaf" }), "Your dietary plan will appear here once your care team adds it. No health information is stored yet.")
+            h("p", { className: "privacy-footnote" }, h(Icon, { name: "leaf" }), "Ask your care team to review any recipe before changing your diet.")
           )
       );
     }
@@ -936,7 +1091,25 @@
             h("thead", null, h("tr", null, h("th", null, "PRODUCT"), h("th", null, "CATEGORY"), h("th", null, "QTY AVAILABLE"), h("th", null, "STOCK STATUS"), h("th", null, "NUTRITION / SERVING"))),
             h("tbody", null, inventory.length
               ? inventory.map((item) => h("tr", { key: item.id },
-                h("td", null, h("div", { className: "product-cell" }, h("span", { className: `product-emoji product-${item.color}` }, item.icon), h("strong", null, item.name))),
+                h("td", null,
+                  h("div", { className: "product-cell" }, h("span", { className: `product-emoji product-${item.color}` }, item.icon), h("strong", null, item.name)),
+                  h("details", { className: "allergen-editor" },
+                    h("summary", null, item.allergenInfoVerified ? "Edit verified allergens" : "Review allergen label"),
+                    h("form", { onSubmit: (event) => updateProductAllergens(event, item) },
+                      h("div", { className: "checkbox-grid" }, ...allergenOptions.map(([value, label]) =>
+                        h("label", { className: "form-checkbox", key: value },
+                          h("input", { type: "checkbox", name: "product_allergens", value, defaultChecked: item.allergens.includes(value) }),
+                          h("span", null, label)
+                        )
+                      )),
+                      h("label", { className: "form-checkbox form-checkbox-review" },
+                        h("input", { type: "checkbox", name: "allergen_info_verified", defaultChecked: item.allergenInfoVerified }),
+                        h("span", null, "Package label reviewed")
+                      ),
+                      h(Button, { type: "submit", variant: "secondary" }, "Save allergen data")
+                    )
+                  )
+                ),
                 h("td", null, h("span", { className: "category-label" }, item.category)),
                 h("td", null,
                   h("div", null, h("strong", null, item.quantity), h("span", { className: "unit-label" }, ` ${item.unit}`)),
@@ -985,9 +1158,42 @@
 
     function RecipesPage() {
       return h(React.Fragment, null,
-        h(PageHeading, { eyebrow: "PERSONALIZED NUTRITION", title: "Recipe recommendations", description: "Recommendations are not connected in this build." }),
-        h("div", { className: "demo-notice" }, h(Icon, { name: "sparkles" }), h("span", null, "No recipes are loaded. Connect a recommendation service to add this feature.")),
-        h("section", { className: "panel empty-state" }, h("strong", null, "No recommendations yet"), h("span", null, "This page no longer displays sample recipe data."))
+        h(PageHeading, {
+          eyebrow: "RECIPE IDEAS",
+          title: "Recipe recommendations",
+          description: "Generate up to five ideas from available inventory. Review every product label before preparing food.",
+          actions: role === "patient"
+            ? h(Button, { icon: "sparkles", disabled: generatingRecipes, onClick: generateRecipeRecommendations },
+              generatingRecipes ? "Generating..." : "Generate AI recommendations")
+            : null,
+        }),
+        h("div", { className: "demo-notice" }, h(Icon, { name: "leaf" }), h("span", null, "Your health conditions and allergen selections are not sent to Gemini. Allergen filtering happens on this server using staff-reviewed product labels; recommendations are not medical advice or live web search.")),
+        role !== "patient"
+          ? h("section", { className: "panel empty-state" }, h("strong", null, "Patient recommendations"), h("span", null, "Sign in with a patient account to generate recipe ideas."))
+          : h(React.Fragment, null,
+            recipeError && h("div", { className: "database-warning", role: "alert" }, recipeError),
+            recipeNote && h("div", { className: "recipe-note", role: "status" }, recipeNote),
+            recipeResults.length
+              ? h("section", { className: "recipe-grid", "aria-label": "Recommended recipes" },
+                ...recipeResults.map((recipe, index) => h("article", { className: "panel ai-recipe-card", key: `${recipe.title}-${index}` },
+                  h("div", { className: `recipe-art recipe-${["mint", "blue", "sand"][index % 3]}` },
+                    h("span", { className: "recipe-art-label" }, recipe.source === "gemini" ? "GEMINI IDEA" : "GENERAL IDEA"),
+                    h("span", { className: "recipe-art-emoji", "aria-hidden": "true" }, ["🥗", "🍲", "🍚", "🥘", "🥬"][index % 5])
+                  ),
+                  h("div", { className: "recipe-body" },
+                    h("h2", null, recipe.title),
+                    h("div", { className: "ingredients-line" },
+                      h("strong", null, "Available ingredients"),
+                      h("p", null, [...(recipe.uses || []), ...(recipe.missing || [])].map((item) => item.name).join(", "))
+                    ),
+                    h("ol", { className: "recipe-steps" }, ...(recipe.steps || []).map((step, stepIndex) => h("li", { key: stepIndex }, step))),
+                    recipe.why_it_fits && h("p", { className: "recipe-why" }, recipe.why_it_fits),
+                    h(Tag, { tone: recipe.source === "gemini" ? "green" : "orange" }, recipe.source === "gemini" ? "Gemini generated" : "Fallback")
+                  )
+                ))
+              )
+              : h("section", { className: "panel empty-state" }, h("strong", null, "No recipe ideas yet"), h("span", null, "Generate ideas when products are in stock."))
+          )
       );
     }
 

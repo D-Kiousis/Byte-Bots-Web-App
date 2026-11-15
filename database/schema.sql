@@ -3,12 +3,14 @@ create table if not exists public.patients (
     created_at timestamptz not null default now()
 );
 
--- Patient profile. Pseudonymous on purpose: a display name is optional and
--- should be a first name or nickname. No health data is stored here yet.
+-- Patient profile. Health-condition and allergen selections are only exposed
+-- through the authenticated patient's own-profile response, not admin lists.
 alter table public.patients
     add column if not exists display_name text check (display_name is null or char_length(display_name) <= 60),
     add column if not exists household_size integer not null default 1 check (household_size between 1 and 20),
-    add column if not exists enrollment_status text not null default 'active' check (enrollment_status in ('active', 'pending', 'expired'));
+    add column if not exists enrollment_status text not null default 'active' check (enrollment_status in ('active', 'pending', 'expired')),
+    add column if not exists health_conditions text[] not null default '{}',
+    add column if not exists allergens text[] not null default '{}';
 
 create table if not exists public.products (
     id uuid primary key default gen_random_uuid(),
@@ -24,7 +26,9 @@ create table if not exists public.products (
 
 alter table public.products
     add column if not exists calories_per_serving numeric(8, 2) not null default 0 check (calories_per_serving >= 0),
-    add column if not exists sodium_mg numeric(8, 2) not null default 0 check (sodium_mg >= 0);
+    add column if not exists sodium_mg numeric(8, 2) not null default 0 check (sodium_mg >= 0),
+    add column if not exists allergens text[] not null default '{}',
+    add column if not exists allergen_info_verified boolean not null default false;
 
 create table if not exists public.inventory (
     id uuid primary key default gen_random_uuid(),

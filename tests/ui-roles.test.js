@@ -191,7 +191,20 @@ const patientRoutes = {
     "GET /api/groceries": ok([
         { id: "p1", name: "Brown rice", category: "Grains", unit: "bag", calories_per_serving: 160, sodium_mg: 5, availability: "in_stock" },
         { id: "p2", name: "Spinach", category: "Produce", unit: "bunch", calories_per_serving: 7, sodium_mg: 24, availability: "limited" }
-    ])
+    ]),
+    "POST /api/ai/recipes": ok({
+        source: "gemini",
+        excluded_count: 0,
+        recipes: [{
+            source: "gemini",
+            title: "Brown rice bowl",
+            servings: 2,
+            uses: [{ id: "p1", name: "Brown rice", category: "Grains" }],
+            missing: [],
+            steps: ["Cook the rice.", "Serve warm."],
+            why_it_fits: "A general idea built from available groceries."
+        }]
+    })
 };
 
 test("an administrator sees patients and products, and can add products", async () => {
@@ -228,6 +241,8 @@ test("a patient sees only their own page and the available groceries", async () 
     assert.equal(ui.buttons("Patients").length, 0, "no Patients menu item");
     assert.ok(home.includes(PATIENT_ID), "their own ID is shown");
     assert.ok(!home.includes(OTHER_ID), "nobody else's ID is shown");
+    assert.ok(home.includes("Health and allergy profile") && home.includes("Chronic kidney disease"));
+    assert.ok(home.includes("Peanuts") && home.includes("not sent to Gemini"));
 
     await ui.clickButton("Groceries");
     const groceries = ui.text();
@@ -235,6 +250,12 @@ test("a patient sees only their own page and the available groceries", async () 
     assert.ok(groceries.includes("Limited") && groceries.includes("Add to cart"));
     assert.ok(!groceries.includes("Add product"), "patients cannot add products");
     assert.ok(!groceries.includes("QTY AVAILABLE"), "patients cannot see or edit stock");
+
+    await ui.clickButton("Recipe recommendations");
+    assert.ok(ui.text().includes("Generate AI recommendations"));
+    await ui.clickButton("Generate AI recommendations");
+    assert.ok(ui.text().includes("Brown rice bowl"), "generated recipes appear on the patient screen");
+    assert.ok(calls.includes("POST /api/ai/recipes"), "the patient screen calls the server recipe route");
 
     for (const forbidden of ["/api/patients", "/api/inventory", "/api/health", "/api/products"]) {
         assert.ok(!calls.some((call) => call.endsWith(forbidden)), `the patient screens must not request ${forbidden}`);
