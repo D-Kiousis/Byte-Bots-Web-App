@@ -189,7 +189,7 @@ const patientRoutes = {
         patient: { id: PATIENT_ID, created_at: "2026-11-14T10:00:00Z", display_name: "Sam", household_size: 3, enrollment_status: "active" }
     }),
     "GET /api/groceries": ok([
-        { id: "p1", name: "Brown rice", category: "Grains", unit: "bag", calories_per_serving: 160, sodium_mg: 5, availability: "in_stock" },
+        { id: "p1", name: "Brown rice", category: "Grains", unit: "bag", calories_per_serving: 160, sodium_mg: 5, safety: { status: "restricted", label: "Restricted" }, availability: "in_stock" },
         { id: "p2", name: "Spinach", category: "Produce", unit: "bunch", calories_per_serving: 7, sodium_mg: 24, availability: "limited" }
     ]),
     "POST /api/ai/recipes": ok({
@@ -247,6 +247,7 @@ test("a patient sees only their own page and the available groceries", async () 
     await ui.clickButton("Groceries");
     const groceries = ui.text();
     assert.ok(groceries.includes("Brown rice") && groceries.includes("Spinach"));
+    assert.ok(groceries.includes("Restricted"), "patient grocery cards show clinical safety labels");
     assert.ok(groceries.includes("Limited") && groceries.includes("Add to cart"));
     assert.ok(!groceries.includes("Add product"), "patients cannot add products");
     assert.ok(!groceries.includes("QTY AVAILABLE"), "patients cannot see or edit stock");

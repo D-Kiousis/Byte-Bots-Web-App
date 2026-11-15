@@ -261,11 +261,15 @@ test("the grocery list shows only what is available, with no stock details", asy
     const byName = Object.fromEntries(groceries.data.map((item) => [item.name, item]));
     assert.equal(byName["Brown rice"].availability, "in_stock");
     assert.equal(byName.Spinach.availability, "limited");
+    assert.ok(groceries.data.every((item) => item.safety && item.safety.status === "approved"));
     for (const item of groceries.data) {
         for (const hidden of ["quantity", "reorder_level", "sku", "products"]) {
             assert.equal(hidden in item, false, `${hidden} must not be exposed`);
         }
     }
+    const adminGroceries = await api("GET", "/api/groceries", { cookie: state.admin });
+    assert.equal(adminGroceries.status, 200);
+    assert.ok(adminGroceries.data.every((item) => item.safety === null));
 
     const spinach = fake.tables().products.find((product) => product.id === state.spinach.id);
     spinach.active = false;

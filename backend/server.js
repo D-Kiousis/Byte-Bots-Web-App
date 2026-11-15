@@ -3,6 +3,7 @@ const fs = require("node:fs");
 const path = require("node:path");
 const ai = require("./ai");
 const auth = require("./auth");
+const clinical = require("./clinical");
 const { randomUUID } = require("node:crypto");
 
 if (typeof process.loadEnvFile === "function") {
@@ -28,7 +29,7 @@ const healthConditions = ["diabetes", "hypertension", "heart_disease", "chronic_
 const allergens = ["milk", "eggs", "fish", "shellfish", "tree_nuts", "peanuts", "wheat", "soy", "sesame"];
 const patientColumns = "id,created_at,display_name,household_size,enrollment_status";
 const patientSelfColumns = `${patientColumns},health_conditions,allergens`;
-const productColumns = "id,name,sku,category,unit,calories_per_serving,sodium_mg,allergens,allergen_info_verified,active,created_at";
+const productColumns = "id,name,sku,category,unit,calories_per_serving,sodium_mg,allergens,allergen_info_verified,active,created_at,protein_g,carbs_g,sugar_g,sat_fat_g,potassium_mg,bin_location";
 const allergenTerms = {
     milk: ["milk", "dairy", "cheese", "butter", "cream", "whey", "casein"],
     eggs: ["egg", "eggs"],
@@ -561,9 +562,22 @@ async function handleApi(req, res, url) {
     // ---- Groceries: what is available right now (any signed-in person) --
     // Deliberately exposes no exact quantities, SKUs or reorder levels.
     if (method === "GET" && pathname === "/api/groceries") {
-        await requireAccount(req);
+        const { account } = await requireAccount(req);
+        let profile = null;
+        if (account.role === "patient") {
+            if (!account.patient_id) {
+                throw new HttpError(403, "Patient profile is not linked to this account.");
+            }
+            const profiles = await supabaseRequest(
+                `patients?id=eq.${encodeURIComponent(account.patient_id)}&select=health_conditions,allergens`
+            );
+            if (!profiles || !profiles[0]) {
+                throw new HttpError(404, "Patient profile not found.");
+            }
+            profile = profiles[0];
+        }
         const rows = await supabaseRequest(
-            "inventory?select=product_id,quantity,reorder_level,products(name,category,unit,calories_per_serving,sodium_mg,allergens,allergen_info_verified,active)&quantity=gt.0&limit=500"
+            "inventory?select=product_id,quantity,reorder_level,products(name,category,unit,calories_per_serving,sodium_mg,allergens,allergen_info_verified,active,protein_g,carbs_g,sugar_g,sat_fat_g,potassium_mg,bin_location)&quantity=gt.0&limit=500"
         );
         const groceries = rows
             .filter((row) => row.products && row.products.active)
@@ -576,6 +590,7 @@ async function handleApi(req, res, url) {
                 sodium_mg: row.products.sodium_mg,
                 allergens: row.products.allergens || [],
                 allergen_info_verified: row.products.allergen_info_verified === true,
+                safety: profile ? clinical.evaluate(row.products, profile) : null,
                 availability: Number(row.quantity) <= Number(row.reorder_level) ? "limited" : "in_stock"
             }))
             .sort((a, b) => a.name.localeCompare(b.name));

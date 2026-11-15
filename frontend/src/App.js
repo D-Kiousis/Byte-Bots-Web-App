@@ -187,6 +187,7 @@
       sodium: Number(record.sodium_mg || 0),
       allergens: Array.isArray(record.allergens) ? record.allergens : [],
       allergenInfoVerified: record.allergen_info_verified === true,
+      safety: record.safety || null,
       limited: record.availability === "limited",
       icon: visual.icon,
       color: visual.color,
@@ -1149,6 +1150,7 @@
                 h("span", { className: "nutrition-cell" }, `${item.calories} cal`, h("i", null), `${item.sodium} mg sodium`)
               ),
               h(Tag, { tone: item.limited ? "orange" : "green" }, h("span", { className: "tag-dot" }), item.limited ? "Limited" : "In stock"),
+              item.safety && h(Tag, { tone: { approved: "green", capped: "orange", restricted: "red" }[item.safety.status] }, item.safety.label),
               h(Button, { variant: "secondary", icon: "plus", onClick: () => addToCart(item.name) }, "Add to cart")
             )))
             : h("div", { className: "empty-state" }, h("strong", null, "Nothing is listed right now"), h("span", null, "Check again soon, or ask a volunteer."))

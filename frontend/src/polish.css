@@ -1,0 +1,82 @@
+/* Visual polish layer. Loaded LAST, changes only look and size, never behavior.
+   Main goals: readable type (the base styles use 8-10px text), calmer depth, smoother motion. */
+:root { --shadow: 0 1px 2px rgba(24,49,75,.04), 0 10px 28px rgba(24,49,75,.06); --ring: 0 0 0 3px rgba(22,135,125,.18); }
+body { font-size: 15px; background: radial-gradient(1200px 500px at 85% -10%, #e6f4f1 0%, transparent 60%), #f5f8fa; }
+
+/* Navigation and top bar */
+.sidebar { box-shadow: 1px 0 0 #e8edf1; }
+.brand-mark { background: linear-gradient(135deg, #19877b, #2fae9c); color: #fff; box-shadow: 0 6px 14px rgba(25,135,123,.28); }
+.brand-name { font-size: 15px; } .brand-subtitle { font-size: 10px; } .workspace-label { font-size: 11px; }
+.nav-item { min-height: 46px; font-size: 14px; border-radius: 10px; }
+.nav-item .icon { width: 19px; height: 19px; } .nav-count { font-size: 11px; }
+.nav-item-active { box-shadow: inset 3px 0 0 #16877d; }
+.privacy-note strong { font-size: 12px; } .privacy-note div span { font-size: 11px; }
+.topbar { position: sticky; top: 0; z-index: 15; backdrop-filter: saturate(1.4) blur(10px); background: rgba(255,255,255,.82); }
+.breadcrumb { font-size: 13px; } .topbar-context { font-size: 12px; } .top-search input { font-size: 14px; } .top-search { height: 40px; }
+.avatar { width: 36px; height: 36px; font-size: 12px; background: linear-gradient(135deg, #dff0ed, #c4e5de); }
+
+/* Headings and buttons */
+.eyebrow { font-size: 11px; letter-spacing: 1.5px; color: #16877d; }
+.page-heading h1 { font-size: 30px; letter-spacing: -.9px; } .page-heading p { font-size: 14px; color: #6d7d8d; }
+.button { min-height: 42px; padding: 0 18px; font-size: 13px; border-radius: 10px; }
+.button-primary { background: linear-gradient(180deg, #1f9a8c, #16877d); }
+.button:active { transform: translateY(0) scale(.98); }
+.button:disabled { opacity: .6; cursor: not-allowed; transform: none; }
+
+/* Cards, stats, banner */
+.panel, .stat-card, .info-tile, .grocery-card { box-shadow: var(--shadow); border-color: #e9eef2; }
+.stat-card, .grocery-card, .quick-action, .ai-recipe-card { transition: transform .18s ease, box-shadow .18s ease, border-color .18s ease; }
+.stat-card:hover, .grocery-card:hover, .ai-recipe-card:hover { transform: translateY(-3px); box-shadow: 0 14px 34px rgba(24,49,75,.11); }
+.stat-label { font-size: 12px; } .stat-value { font-size: 32px; } .stat-footer { font-size: 12px; } .stat-icon { width: 36px; height: 36px; }
+.welcome-banner { min-height: 240px; padding: 36px 44px; background: linear-gradient(115deg, #14304a 0%, #1b5560 58%, #2a9585 100%); }
+.banner-kicker { font-size: 11px; } .welcome-copy h2 { font-size: 34px; } .welcome-copy p { font-size: 15px; max-width: 420px; }
+.welcome-copy .button { font-size: 13px; min-height: 42px; }
+.panel-heading h2, .table-toolbar h2, .detail-panel h2 { font-size: 17px; }
+.panel-heading p, .table-toolbar p { font-size: 13px; }
+.quick-action strong { font-size: 13px; } .quick-action small { font-size: 12px; } .quick-action { padding: 14px 12px; }
+.activity-copy strong { font-size: 13px; } .activity-copy span, .activity-item time { font-size: 12px; }
+.text-button { font-size: 13px; } .table-updated { font-size: 12px; }
+
+/* Tables */
+th { font-size: 11px; padding: 12px 14px; } td { font-size: 13px; padding: 14px; }
+tbody tr { transition: background .15s; } tbody tr:hover { background: #f8fbfb; }
+.patient-id-cell strong { font-size: 14px; } .patient-id-cell small { font-size: 11px; }
+.tag { font-size: 12px; padding: 5px 10px; } .category-label { font-size: 12px; padding: 4px 9px; }
+.row-action { font-size: 13px; } .nutrition-cell { font-size: 12px; }
+.stock-editor input { width: 70px; height: 34px; font-size: 13px; } .stock-editor .stock-save { min-height: 34px; font-size: 12px; }
+.inventory-summary span, .order-stats span { font-size: 11px; } .inventory-summary strong { font-size: 22px; }
+.empty-state { font-size: 14px; } .empty-state strong { font-size: 16px; }
+.patient-summary-card strong { font-size: 18px; } .patient-summary-card div span, .privacy-inline, .privacy-footnote { font-size: 12px; }
+
+/* Forms and modals */
+.form-label, .form-fieldset legend { font-size: 13px; }
+.form-control { height: 44px; font-size: 14px; border-radius: 9px; }
+.form-control:focus, .auth-input:focus, .stock-editor input:focus { border-color: #16877d; box-shadow: var(--ring); outline: none; }
+.form-checkbox { font-size: 13px; min-height: 34px; } .form-checkbox input { width: 17px; height: 17px; }
+.field-help, .form-privacy, .modal-header p, .uuid-preview { font-size: 12px; } .modal-header h2 { font-size: 21px; }
+.allergen-editor summary { font-size: 12px; } .allergen-editor .form-checkbox { font-size: 12px; }
+.modal { border-radius: 18px; } .modal-backdrop { animation: fade-in .18s ease-out; }
+
+/* Recipes, cart, settings */
+.recipe-art-label { font-size: 10px; } .recipe-body h2 { font-size: 17px; } .recipe-steps { font-size: 13px; line-height: 1.6; }
+.recipe-why, .ingredients-line strong, .ingredients-line p { font-size: 12px; } .recipe-note, .demo-notice, .database-warning { font-size: 13px; }
+.cart-item { font-size: 14px; min-height: 64px; } .cart-quantity, .cart-footer span { font-size: 13px; } .cart-footer strong { font-size: 15px; }
+.suggested-card strong { font-size: 13px; } .suggested-products h2 { font-size: 17px; }
+.settings-row strong { font-size: 14px; } .settings-row div span, .settings-privacy, .settings-key-instructions { font-size: 13px; }
+.settings-key-instructions pre { font-size: 13px; }
+.toast { font-size: 13px; padding: 14px 18px; } .app-footer { font-size: 11px; } .back-link { font-size: 13px; }
+.profile-identity h2 { font-size: 15px; } .profile-identity>span:last-child { font-size: 12px; } .profile-identity .eyebrow { font-size: 10px; }
+.grocery-info strong { font-size: 16px; } .grocery-info span { font-size: 13px; }
+
+/* Sign-in */
+.auth-screen { background: radial-gradient(900px 480px at 50% -10%, #d7efea 0%, transparent 65%), #f5f8fa; }
+.auth-card { border-radius: 18px; box-shadow: 0 24px 60px rgba(24,49,75,.12); border-color: #e4ebef; }
+
+@keyframes fade-in { from { opacity: 0; } to { opacity: 1; } }
+@keyframes rise-in { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }
+.main-content > * { animation: rise-in .28s ease-out both; }
+@media (max-width: 600px) {
+  .page-heading h1 { font-size: 25px; } .welcome-copy h2 { font-size: 26px; max-width: 260px; } .welcome-copy p { max-width: 260px; }
+  .stat-value { font-size: 26px; } th { font-size: 10px; } td { font-size: 13px; } .app-footer { font-size: 10px; }
+}
+@media (prefers-reduced-motion: reduce) { *, *::before, *::after { animation: none !important; transition: none !important; } }
